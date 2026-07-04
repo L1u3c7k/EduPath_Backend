@@ -23,7 +23,7 @@ class User(Base):
         index=True
     )
 
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    password: Mapped[str] = mapped_column(String(255), nullable=False)
 
     refresh_token: Mapped[str | None] = mapped_column(
         String(512),

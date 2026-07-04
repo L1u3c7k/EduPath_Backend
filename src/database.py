@@ -1,17 +1,14 @@
 from sqlalchemy import create_engine
+from src.config import settings
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-DATABASE_URL = "postgresql://postgres:root@localhost:5432/EduPath_Backend"
-
-engine = create_engine(DATABASE_URL)
+engine = create_engine(settings.DATABASE_URL)
 
 SessionLocal = sessionmaker(
-    autocommit=False,
+    bind=engine,
     autoflush=False,
-    bind=engine
+    autocommit=False,
 )
-
-
 class Base(DeclarativeBase):
     pass
 
