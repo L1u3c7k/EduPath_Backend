@@ -11,6 +11,10 @@ class QuizCreate(QuizBase):
     pass
 
 
+class QuizUpdate(BaseModel):
+    chat_id: int | None = None
+
+
 class QuizResponse(QuizBase):
     id: int
     created_at: datetime

@@ -1,17 +1,9 @@
-from fastapi import FastAPI
-from src.router.User import user_router
-from src.database import engine
-import src.database as database
-import src.models
+# src/__init__.py
 
-version = "v1"
+from src.user.user_model import User
+from src.chat.model.chat_model import Chat
+from src.chat.model.message_model import Message  # (or whatever your Chat class name is)
+from src.quiz.quiz_model import Quiz
+from src.question.question_model import Question
 
-
-app = FastAPI(
-  title="Edupath",
-  description="A REST API for RAG",
-  version= version
-)
-database.Base.metadata.create_all(bind=engine)
-
-app.include_router(user_router, prefix=f"/api/{version}/users", tags=["users"])
+__all__ = ["User", "Chat","Message", "Quiz", "Question"]
