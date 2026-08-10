@@ -3,7 +3,7 @@ from pydantic import SecretStr
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file = ".env",
+        env_file=(".env", "src/.env", "../.env"),
         env_file_encoding = "utf-8"
     )
     DATABASE_URL: str
@@ -11,7 +11,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str
     ACCESS_TOKEN_EXPIRE: int
     REFRESH_TOKEN_EXPIRE: int
-    # access_token_expire_minutes:int =30
+    OPENROUTER_API_KEY: str
+    OPENROUTER_API_BASE: str
+  
 
     
         

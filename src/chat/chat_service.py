@@ -56,10 +56,7 @@ class ChatService:
     async def add_messages_to_existing_chat(
         self, db: AsyncSession, chat_id: int, user_text: str, assistant_text: str
     ) -> MessageResponse:
-        """
-        Appends a user and assistant message to an existing chat, 
-        and returns the assistant's message formatted via Pydantic.
-        """
+       
         try:
             # 1. Instantiate the two message records bound to this chat_id
             user_msg = Message(chat_id=chat_id, role="user", content=user_text)
@@ -77,10 +74,7 @@ class ChatService:
             raise e
         
     async def get_chat_with_history(self, db: AsyncSession, chat_id: int) -> ChatResponse:
-        """
-        Fetches an existing chat room and all its historical messages,
-        returning it formatted safely as a Pydantic ChatResponse.
-        """
+        
         # Query the chat and eagerly load the messages relationship
         statement = (
             select(Chat)

@@ -36,6 +36,12 @@ class AccessTokenBearer(TokenBearer):
   def verify_token_data(self,token_data:dict)->None:
     if token_data and token_data["refresh"]:
       raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,detail="Please provide access token")
+    if token_data is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Access token has expired or is invalid"
+            )
+    
 
 class RefreshTokenBearer(TokenBearer):
   def verify_token_data(self,token_data:dict)->None:
