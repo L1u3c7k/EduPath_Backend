@@ -46,7 +46,7 @@ async def continue_chat(
     assistant_message = await chat_service.add_messages_to_existing_chat(
         db=db,
         chat_id=chat_id,
-        user_text=payload.content,
+        user_text=payload.message,
         assistant_text=ai_response_text
     )
     return assistant_message

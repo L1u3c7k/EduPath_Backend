@@ -1,51 +1,76 @@
 import asyncio
+import logging
+import os
+import sys
 from logging.config import fileConfig
+from pathlib import Path
 
+from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from alembic import context
+logger = logging.getLogger("alembic.env")
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
+# 1. Add the project root directory (EduPath_Backend) to sys.path
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+# 2. Import Base metadata from database.py in src/
+from src.database import Base
+
+# 3. Import all feature models so Base.metadata registers every table
+try:
+    import src.chat.model
+except ImportError as e:
+    logger.warning(f"Could not import src.chat.model: {e}")
+
+try:
+    import src.quiz.quiz_model
+except ImportError as e:
+    logger.warning(f"Could not import src.quiz.quiz_model: {e}")
+
+try:
+    import src.user.user_model
+except ImportError as e:
+    logger.warning(f"Could not import src.user.user_model: {e}")
+
+try:
+    import src.question.question_model
+except ImportError as e:
+    logger.warning(f"Could not import src.question.question_model: {e}")
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Alembic Config object
 config = context.config
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
+# Setup database URL dynamically from environment
+database_url = os.getenv("DATABASE_URL")
+
+if database_url:
+    # Ensure correct async driver prefix for PostgreSQL (asyncpg)
+    if database_url.startswith("postgresql://"):
+        database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    config.set_main_option("sqlalchemy.url", database_url)
+
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-target_metadata = None
-
-# other values from the config, defined by the needs of env.py,
-# can be acquired:
-# my_important_option = config.get_main_option("my_important_option")
-# ... etc.
+# Link models metadata for autogenerate support
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode.
-
-    This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well.  By skipping the Engine creation
-    we don't even need a DBAPI to be available.
-
-    Calls to context.execute() here emit the given string to the
-    script output.
-
-    """
+    """Run migrations in 'offline' mode."""
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        compare_type=True,  # Enables type change detection
     )
 
     with context.begin_transaction():
@@ -53,18 +78,19 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    """Run migrations using the provided connection context."""
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,  # Enables type change detection
+    )
 
     with context.begin_transaction():
         context.run_migrations()
 
 
 async def run_async_migrations() -> None:
-    """In this scenario we need to create an Engine
-    and associate a connection with the context.
-
-    """
-
+    """Run migrations in 'online' mode with an async engine."""
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
@@ -79,7 +105,6 @@ async def run_async_migrations() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-
     asyncio.run(run_async_migrations())
 
 

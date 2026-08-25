@@ -16,9 +16,10 @@ class Question(Base):
         nullable=False
     )
     
-    answer = Column(String, nullable=False)
+    user_answer = Column(String, nullable=False)
+    model_answer= Column(String, nullable=False)
 
-    subject = Column(String, nullable=False)
+    question = Column(String, nullable=False)
 
     created_at = Column(
         DateTime(timezone=True),

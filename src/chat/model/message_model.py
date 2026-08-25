@@ -25,7 +25,7 @@ class Message(Base):
 
     role = Column(SQLEnum(MessageRole), nullable=False, default=MessageRole.USER)
 
-    content = Column(String, nullable=False)
+    message = Column(String, nullable=False)
 
     created_at = Column(
         DateTime(timezone=True),
