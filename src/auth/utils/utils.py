@@ -23,12 +23,11 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         hashed_password.encode('utf-8')
     )
 
-def create_access_token(user_data:dict,expiry:timedelta = None,refresh:bool=False):
+def create_access_token(user_data:dict,expiry:timedelta ,refresh:bool=False):
     payload ={}
     payload["user"] = user_data
-    payload["exp"] = datetime.now(timezone.utc) + (
-        expiry if expiry is not None else timedelta(seconds=settings.ACCESS_TOKEN_EXPIRE)
-    )
+    
+    payload["exp"] =datetime.now(timezone.utc) + expiry
     payload["jti"] =str(uuid.uuid4())
 
     payload["refresh"] = refresh
@@ -48,11 +47,12 @@ def decode_token(token:str) ->dict:
             algorithms=[settings.JWT_ALGORITHM]
         )
         return token_data
-    except jwt.PyJWKError as e:
-        logging.exception(e)
-        return None
-
     except jwt.ExpiredSignatureError:
-        logging.warning("Token has expired")
-        return None
+            logging.warning("Token has expired")
+            return None
+
+    except jwt.PyJWTError as e:
+            # Catches InvalidSignatureError, DecodeError, etc.
+            logging.exception(f"JWT decode error: {e}")
+            return None
         

@@ -1,58 +1,94 @@
 from typing import List
-
 from fastapi import APIRouter, Depends, HTTPException, status
-from src.database import get_db
-from src.user.user_schema import *
-from src.user.user_service import UserService
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.database import get_db
+from src.user.user_schema import UserCreate, UserResponse, UserUpdate, UserPasswordUpdate
+from src.user.user_service import UserService
+from src.auth.utils.dependencies import AccessTokenBearer
+
 user_router = APIRouter()
 user_service = UserService()
+access_token_bearer = AccessTokenBearer()
 
 
-@user_router.get("/", response_model=List[UserResponse])
-async def get_users(db: AsyncSession = Depends(get_db)):
-    return await user_service.get_users(db)
-
-
-@user_router.get("/{user_id}", response_model=UserResponse)
-async def get_user_by_id(user_id: int, db: AsyncSession = Depends(get_db)):
-    user = user_service.get_user(db, user_id)
+@user_router.get("/", response_model=UserResponse)
+async def get_user_by_id(
+    db: AsyncSession = Depends(get_db), 
+    security: dict = Depends(access_token_bearer)
+):
+    current_user_id = int(security["user"]["user_id"])
+    user = await user_service.get_user_by_id(db, current_user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="User not found"
+        )
     return user
 
 
 @user_router.post("/", status_code=status.HTTP_201_CREATED, response_model=UserResponse)
-async def create_user(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
-    existing_user = user_service.get_user_by_email(db, user_data.email)
+async def create_user(
+    user_data: UserCreate, 
+    db: AsyncSession = Depends(get_db)
+):
+    existing_user = await user_service.get_user_by_email(db, user_data.email)
     if existing_user:
-        raise HTTPException(status_code=400, detail="User already exists")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="User already exists"
+        )
 
-    return user_service.create_user(db, user_data)
+    return await user_service.create_user(db, user_data)
 
 
-@user_router.patch("/{user_id}", response_model=UserResponse)
-async def update_user(
-    user_id: int,
+@user_router.delete("/", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    db: AsyncSession = Depends(get_db), 
+    security: dict = Depends(access_token_bearer)
+):
+    current_user_id = int(security["user"]["user_id"])
+
+    user = await user_service.get_user_by_id(db, current_user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="User not found"
+        )
+
+    await user_service.delete_user(db, user)
+
+
+@user_router.patch("/profile", response_model=UserResponse)
+async def update_profile(
     user_data: UserUpdate,
     db: AsyncSession = Depends(get_db),
+    security: dict = Depends(access_token_bearer)
 ):
-    user = user_service.get_user(db, user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    current_user_id = int(security["user"]["user_id"])
+    current_user = await user_service.get_user_by_id(db, current_user_id)
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="User not found"
+        )
+        
+    return await user_service.update_user(db, current_user.id, user_data)
 
-    if user_data.email and user_data.email != user.email:
-        existing_user = user_service.get_user_by_email(db, user_data.email)
-        if existing_user:
-            raise HTTPException(status_code=400, detail="Email already exists")
 
-    return user_service.update_user(db, user, user_data)
+@user_router.patch("/change-password")
+async def change_password(
+    password_data: UserPasswordUpdate,
+    db: AsyncSession = Depends(get_db),
+    security: dict = Depends(access_token_bearer)
+):
+    current_user_id = int(security["user"]["user_id"])
 
-
-@user_router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user(user_id: int, db: AsyncSession = Depends(get_db)):
-    user = user_service.get_user(db, user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    user_service.delete_user(db, user)
+    current_user = await user_service.get_user_by_id(db, current_user_id)
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="User not found"
+        )
+        
+    return await user_service.change_password(db, current_user, password_data)

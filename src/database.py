@@ -6,6 +6,8 @@ from src.config import settings
 # 1. Use create_async_engine instead of create_engine
 engine = create_async_engine(
     settings.DATABASE_URL,
+    pool_pre_ping=True, 
+    pool_recycle=3600,
     echo=False,
 )
 

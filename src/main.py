@@ -30,13 +30,16 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust to specific domains in production!
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],  # Adjust to specific domains in production!
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(user_router, prefix=f"/api/{version}/users", tags=["user"])
+app.include_router(user_router, prefix=f"/api/{version}/user", tags=["user"])
 app.include_router(authRouter, prefix=f"/api/{version}/auth", tags=["auth"])
 app.include_router(chat_router, prefix=f"/api/{version}/chat", tags=["chat"])
 

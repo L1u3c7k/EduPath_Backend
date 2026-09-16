@@ -1,13 +1,11 @@
 import hashlib
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.auth.utils.dependencies import RefreshTokenBearer
-from src.auth.utils.utils import create_access_token, verify_password
+from src.auth.utils.utils import create_access_token, decode_token, verify_password
 from src.config import settings
 from src.database import get_db
 from src.user.user_model import User
@@ -16,112 +14,136 @@ from src.user.user_service import UserService
 
 authRouter = APIRouter()
 user_service = UserService()
-refresh_token_bearer = RefreshTokenBearer()  # Renamed to avoid name shadowing
 
 
 def hash_token(token: str) -> str:
-    return hashlib.sha256(token.encode('utf-8')).hexdigest()
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 @authRouter.post("/login")
-async def login(loginDetails: UserInLogin, db: AsyncSession = Depends(get_db)):
+async def login(
+    loginDetails: UserInLogin,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
     user = await user_service.get_user_by_email(db, loginDetails.email)
 
     if not user or not verify_password(loginDetails.password, user.password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
+            detail="Invalid email or password",
         )
 
-    # 1. Create the tokens
+    # 1. Create access token
     access_token = create_access_token(
-        user_data={"email": user.email, "user_id": str(user.id)}
+        user_data={"email": user.email, "user_id": str(user.id)},expiry=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE)
     )
-    
-    refresh_expiry = timedelta(days=settings.REFRESH_TOKEN_EXPIRE)
+
+    # 2. Create refresh token
+    refresh_expiry = settings.REFRESH_TOKEN_EXPIRE
     raw_refresh_token = create_access_token(
         user_data={"email": user.email, "user_id": str(user.id)},
         refresh=True,
-        expiry=refresh_expiry
+        expiry=timedelta(days=refresh_expiry),
     )
 
-    # 2. Save token hash & expiry to the DB model
+    # 3. Save token hash & expiry to DB
     user.refresh_token = hash_token(raw_refresh_token)
-    user.refresh_token_expires_at = datetime.now(timezone.utc) + refresh_expiry
-    
-    # 3. Commit changes
+    user.refresh_token_expires_at = datetime.now(timezone.utc) + timedelta(days=refresh_expiry)
     await db.commit()
 
-    return JSONResponse(
-        content={
-            "message": "Login Successful",
-            "access_token": access_token,
-            "refresh_token": raw_refresh_token,
-        }
+    # 4. Attach refresh token as HttpOnly Cookie
+    response.set_cookie(
+        key="refresh_token",
+        value=raw_refresh_token,
+        httponly=True,
+        secure=getattr(settings, "COOKIE_SECURE", False),
+        samesite="lax",
+        max_age=int(timedelta(days=refresh_expiry).total_seconds()),
+        path="/",
     )
+
+    return {"message": "Login Successful", "access_token": access_token}
 
 
 @authRouter.post("/signup", response_model=UserResponse)
 async def signUp(signUpDetails: UserCreate, db: AsyncSession = Depends(get_db)):
-    user_exists = await user_service.user_exists(signUpDetails.email, db)
+    user_exists = await user_service.user_exists( db,signUpDetails.email)
     if user_exists:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="User with this email already exists"
+            detail="User with this email already exists",
         )
-  
+
     new_user = await user_service.create_user(db, signUpDetails)
     return new_user
 
 
 @authRouter.post("/refresh_token")
 async def get_new_access_token(
-    token_details: dict = Depends(refresh_token_bearer),
-    db: AsyncSession = Depends(get_db)
+    request: Request, db: AsyncSession = Depends(get_db)
 ):
-    user_id = int(token_details["user"]["user_id"])
+    raw_refresh_token = request.cookies.get("refresh_token")
 
-    # Verify user exists in database and token wasn't revoked
+    if not raw_refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token missing from cookies",
+        )
+
+    token_data = decode_token(raw_refresh_token)
+
+    if not token_data or token_data.get("refresh") is not True:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Only refresh tokens are allowed on this endpoint",
+        )
+
+    user_id = int(token_data["user"]["user_id"])
+
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalars().first()
 
-    if not user or not user.refresh_token:
+    incoming_hash = hash_token(raw_refresh_token)
+    if not user or user.refresh_token != incoming_hash:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or revoked refresh token"
+            detail="Invalid or revoked refresh token",
         )
 
-    # Check expiration timestamp safely
-    if user.refresh_token_expires_at and user.refresh_token_expires_at < datetime.now(timezone.utc):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Refresh token expired"
-        )
+    if user.refresh_token_expires_at:
+        expires_at = user.refresh_token_expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        if expires_at < datetime.now(timezone.utc):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Refresh token expired",
+            )
 
     new_access_token = create_access_token(
-        user_data={"email": user.email, "user_id": str(user.id)}
+        user_data={"email": user.email, "user_id": str(user.id)},expiry=timedelta(seconds=settings.ACCESS_TOKEN_EXPIRE)
     )
-    
-    return JSONResponse(
-        content={
-            "access_token": new_access_token
-        }
-    )
+
+    return {"access_token": new_access_token}
 
 
 @authRouter.post("/logout")
 async def logout(
-    token_details: dict = Depends(refresh_token_bearer),
-    db: AsyncSession = Depends(get_db)
+    request: Request, response: Response, db: AsyncSession = Depends(get_db)
 ):
-    user_id = int(token_details["user"]["user_id"])
-    
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalars().first()
+    raw_refresh_token = request.cookies.get("refresh_token")
+    if raw_refresh_token:
+        token_data = decode_token(raw_refresh_token)
+        if token_data and "user" in token_data:
+            user_id = int(token_data["user"]["user_id"])
+            result = await db.execute(select(User).where(User.id == user_id))
+            user = result.scalars().first()
+            if user:
+                user.refresh_token = None
+                user.refresh_token_expires_at = None
+                await db.commit()
 
-    if user:
-        user.refresh_token = None
-        user.refresh_token_expires_at = None
-        await db.commit()
-
-    return JSONResponse(content={"message": "Logged out successfully"})
+    response.delete_cookie(key="refresh_token", path="/")
+    return {"message": "Logged out successfully"}

@@ -6,6 +6,7 @@ from sqlalchemy import Enum as SQLEnum
 
 
 class MessageBase(BaseModel):
+    
     message: str = Field(min_length=1)
 
 
@@ -14,13 +15,12 @@ class MessageCreate(MessageBase):
 
 
 class MessageUpdate(BaseModel):
-    chat_id: int | None = None
-    role: str | None = Field(default=None, min_length=1, max_length=50)
-    message: str | None = Field(default=None, min_length=1)
+    
+    message: str = Field(default=None, min_length=1)
 
 
 class MessageResponse(MessageBase):
     id: int
     created_at: datetime
-
+    role:str
     model_config = ConfigDict(from_attributes=True)
