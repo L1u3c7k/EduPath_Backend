@@ -1,6 +1,7 @@
 from datetime import datetime
 from sqlalchemy import ForeignKey, DateTime, func,UUID, Integer, Column
 from sqlalchemy.orm import relationship
+
 from src.database import Base
 import uuid
 
@@ -21,6 +22,22 @@ class Quiz(Base):
         ForeignKey("chats.id", ondelete="CASCADE"),
         unique=True,
         nullable=False
+    )
+
+    current_question = Column(
+        Integer,
+        nullable=False,
+        default=1
+    )
+
+    last_message_id = Column(
+        Integer,
+        nullable=True
+    )
+
+    completed_at = Column(
+        DateTime(timezone=True),
+        nullable=True
     )
 
     created_at = Column(

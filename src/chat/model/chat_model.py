@@ -25,6 +25,11 @@ class Chat(Base):
         nullable=True
     )
 
+    subject = Column(
+        String(255),
+        nullable=True
+    )
+
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),

@@ -1,14 +1,32 @@
-from src.ai_model.topic.session import session
+import asyncio
+
+from src.database import AsyncSessionLocal
 from src.ai_model.chat.manager import ai_chat
 
 
-while True:
+async def main():
+    current_subject = None
 
-    question = input("\nUser: ")
+    async with AsyncSessionLocal() as db:
 
-    if question == "exit":
-        break
+        while True:
+            question = input("\nUser: ")
 
-    answer = ai_chat(question)
+            if question.lower() == "exit":
+                break
 
-    print("\nAI:", answer)
+            (
+                answer,
+                current_subject,
+                hierarchy,
+            ) = await ai_chat(
+                question=question,
+                db=db,
+                current_subject=current_subject,
+            )
+
+            print("\nAI:", answer)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

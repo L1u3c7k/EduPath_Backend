@@ -1,60 +1,31 @@
-from src.ai_model.llm.client import client, is_client_available
-from src.ai_model.config import MODEL
+from src.ai_model.topic.subject import get_subject
 
 
-def check_relevance(topic, question):
-    if not is_client_available():
-        return True
+def check_relevance(
+    current_subject: str,
+    docs: list[dict],
+) -> bool:
 
+    if not current_subject:
+        return False
 
-    prompt=f"""
+    current_subject = current_subject.strip().lower()
 
-Current conversation topic:
+    for doc in docs:
 
-{topic}
+        metadata = doc.get(
+            "metadata",
+            {}
+        )
 
+        subject = get_subject(
+            metadata
+        )
 
-New question:
+        if not subject:
+            continue
 
-{question}
+        if subject.strip().lower() == current_subject:
+            return True
 
-
-Is this question related?
-
-Answer ONLY YES or NO.
-
-"""
-
-
-    response=client.chat.completions.create(
-
-        model=MODEL,
-
-        messages=[
-            {
-                "role":"user",
-                "content":prompt
-            }
-        ],
-
-        temperature=0
-
-    )
-
-    if not response.choices:
-        print(response)
-        return "General"
-
-    return response.choices[0].message.content.strip()
-
-
-    return (
-        response
-        .choices[0]
-        .message
-        .content
-        .strip()
-        .upper()
-        ==
-        "YES"
-    )
+    return False

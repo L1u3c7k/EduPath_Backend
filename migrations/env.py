@@ -31,10 +31,17 @@ except ImportError as e:
     logger.warning(f"Could not import src.chat.model: {e}")
 
 try:
-    import src.quiz.quiz_model
+    import src.quiz.model.quiz_model
 except ImportError as e:
-    logger.warning(f"Could not import src.quiz.quiz_model: {e}")
-
+    logger.warning(f"Could not import src.quiz.model.quiz_model: {e}")
+try:
+    import src.quiz.model.quiz_attempt_model
+except ImportError as e:
+    logger.warning(f"Could not import src.quiz.model.quiz_attempt_model: {e}")
+try:
+    import src.quiz.model.quiz_attempt_model
+except ImportError as e:
+    logger.warning(f"Could not import src.quiz.model.quiz_attempt_model: {e}")
 try:
     import src.user.user_model
 except ImportError as e:
@@ -86,11 +93,13 @@ target_metadata = Base.metadata
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
     url = config.get_main_option("sqlalchemy.url")
+
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        compare_type=True,
         compare_type=True,
     )
 
@@ -104,6 +113,7 @@ def do_run_migrations(connection: Connection) -> None:
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
+        compare_type=True,
     )
 
     with context.begin_transaction():
@@ -111,23 +121,30 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    """Run migrations in 'online' mode with an async engine."""
+    """Run migrations using the provided connection with an async engine."""
     connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        config.get_section(
+            config.config_ini_section,
+            {},
+        ),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
         connect_args=build_connect_args(str(settings.DATABASE_URL)),
     )
 
     async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
+        await connection.run_sync(
+            do_run_migrations
+        )
 
     await connectable.dispose()
 
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    asyncio.run(run_async_migrations())
+    asyncio.run(
+        run_async_migrations()
+    )
 
 
 if context.is_offline_mode():

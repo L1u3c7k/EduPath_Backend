@@ -15,10 +15,12 @@ class ChatCreate(BaseModel):
 class ChatResponse(ChatBase):
     id: UUID
     user_id: UUID
+    subject: str | None
     
     created_at: datetime
-    messages: list[MessageResponse] = []
+    messages: list[MessageResponse] = Field(default_factory=list)
 
 class ChatSessionResponse(ChatBase):
     id:UUID
     user_id:UUID
+    subject: str | None

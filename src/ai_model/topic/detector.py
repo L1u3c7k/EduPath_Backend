@@ -1,49 +1,77 @@
-from src.ai_model.llm.client import client, is_client_available
-from src.ai_model.config import MODEL
+from src.ai_model.topic.subject import get_subject
 
 
-def detect_topic(question, context):
-    if not is_client_available():
-        return "General"
+def detect_topic(
+    docs: list[dict],
+) -> dict | None:
 
+    if not docs:
+        return None
 
-    prompt=f"""
+    subject_counts = {}
 
-Determine the learning topic.
+    # Count subjects among retrieved documents
+    for doc in docs:
 
-Question:
+        metadata = doc.get(
+            "metadata",
+            {}
+        )
 
-{question}
+        subject = get_subject(
+            metadata
+        )
 
+        if not subject:
+            continue
 
-Context:
+        subject = subject.strip()
 
-{context}
+        if not subject:
+            continue
 
+        subject_counts[subject] = (
+            subject_counts.get(subject, 0) + 1
+        )
 
-Return only the topic name.
+    if not subject_counts:
+        return None
 
-"""
-
-
-    response=client.chat.completions.create(
-
-        model=MODEL,
-
-        messages=[
-            {
-                "role":"user",
-                "content":prompt
-            }
-        ],
-
-        temperature=0
-
+    # Select the most common subject
+    subject = max(
+        subject_counts,
+        key=subject_counts.get
     )
 
-    
-    if not response.choices:
-        print(response)
-        return "General"
+    # Find the highest-ranked document
+    # belonging to the detected subject
+    for doc in docs:
 
-    return response.choices[0].message.content.strip()
+        metadata = doc.get(
+            "metadata",
+            {}
+        )
+
+        doc_subject = get_subject(
+            metadata
+        )
+
+        if not doc_subject:
+            continue
+
+        if doc_subject.strip().lower() != subject.lower():
+            continue
+
+        return {
+            "subject": subject,
+            "chapter": metadata.get("chapter"),
+            "topic": metadata.get("topic"),
+            "subtopic": metadata.get("subtopic"),
+        }
+
+    return {
+        "subject": subject,
+        "chapter": None,
+        "topic": None,
+        "subtopic": None,
+    }
