@@ -15,7 +15,7 @@ class QuizService:
         return [
             {
                 "id": i,
-                "text": f"Mock Question {i} based on chat topic: {topic_title}",
+                "question": f"Mock Question {i} based on chat topic: {topic_title}",
                 "rubric": f"Mock ideal answer / rubric for question {i}.",
                 "attempts_left": 3,
                 "attempts_used": 0,
@@ -123,7 +123,7 @@ class QuizService:
                 questions=questions
             )
 
-            # Clear cache from Redis
+            # Delete the Redis session only after the database commit succeeds.
             await redis_client.delete(session_key)
 
             return {
@@ -155,30 +155,30 @@ class QuizService:
         """
         Persists completed quiz session and individual question attempts to PostgreSQL.
         """
-        # 1. Create parent Quiz entry directly with UUIDs
-        quiz_record = Quiz(
-            user_id=user_id,
-            chat_id=chat_id
-        )
-        db.add(quiz_record)
-        await db.flush()  # Generates quiz_record.id for foreign key assignment
+        if not questions or not all(q.get("is_finished", False) for q in questions):
+            raise ValueError("Cannot save a quiz until all questions are finished.")
 
-        # 2. Map Redis question dictionaries to Question ORM models
-        question_objects = [
-            Question(
-                quiz_id=quiz_record.id,
-                question=q["text"],
-                model_answer=q["rubric"],
-                user_answer=q.get("last_user_answer"),
-                is_correct=q.get("passed", False),
-                ai_feedback=q.get("last_feedback"),
-                attempts_used=q.get("attempts_used", 1)
-            )
-            for q in questions
-        ]
+        try:
+            quiz_record = Quiz(chat_id=chat_id)
+            db.add(quiz_record)
+            await db.flush()  # Assigns the quiz ID before question rows are created.
 
-        db.add_all(question_objects)
-        await db.commit()
-        await db.refresh(quiz_record)
-
-        return quiz_record
+            question_objects = [
+                Question(
+                    quiz_id=quiz_record.id,
+                    question=q["question"],
+                    model_answer=q["rubric"],
+                    user_answer=q.get("last_user_answer"),
+                    is_correct=q.get("passed", False),
+                    ai_feedback=q.get("last_feedback"),
+                    attempts_used=q.get("attempts_used", 0),
+                )
+                for q in questions
+            ]
+            db.add_all(question_objects)
+            await db.commit()
+            await db.refresh(quiz_record)
+            return quiz_record
+        except Exception:
+            await db.rollback()
+            raise
