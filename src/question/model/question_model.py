@@ -51,8 +51,4 @@ class Question(Base):
         back_populates="questions"
     )
 
-    attempts = relationship(
-        "QuizAttempt",
-        back_populates="question",
-        cascade="all, delete-orphan"
-    )
+    
