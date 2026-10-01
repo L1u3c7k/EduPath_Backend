@@ -1,6 +1,7 @@
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 from src.chat.schema.message_schema import MessageResponse
+from uuid import UUID
 
 class ChatBase(BaseModel):
     title: str | None = Field(default=None, max_length=255)
@@ -12,12 +13,12 @@ class ChatCreate(BaseModel):
 
 
 class ChatResponse(ChatBase):
-    id: int
-    user_id: int
+    id: UUID
+    user_id: UUID
     
     created_at: datetime
     messages: list[MessageResponse] = []
 
 class ChatSessionResponse(ChatBase):
-    id:int
-    user_id:int
+    id:UUID
+    user_id:UUID

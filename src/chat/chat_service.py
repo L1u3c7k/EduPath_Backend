@@ -6,7 +6,9 @@ from sqlalchemy import select, update, func
 from src.chat.schema.message_schema import MessageResponse
 from fastapi import HTTPException, status
 from sqlalchemy.orm import selectinload
+from src.quiz.quiz_service import QuizService
 
+quiz_service = QuizService()
 
 class ChatService:
     async def create_chat_session(
@@ -80,7 +82,13 @@ class ChatService:
         return ChatResponse.model_validate(chat_record)
         
     async def add_messages_to_existing_chat(
-        self, db: AsyncSession, chat_id: int, user_id: int, user_text: str, assistant_text: str
+    self, 
+    db: AsyncSession, 
+    chat_id: int, 
+    user_id: int, 
+    user_text: str, 
+    assistant_text: str, 
+        redis_client
     ) -> MessageResponse:
         try:
             # Verify chat existence and ownership first
@@ -101,8 +109,28 @@ class ChatService:
             
             db.add_all([user_msg, assistant_msg])
             await db.flush()
-            
-            response_data = MessageResponse.model_validate(assistant_msg)
+
+            # Check if user messages count in this chat reaches or exceeds 5
+            count_stmt = (
+                select(func.count(Message.id))
+                .where(Message.chat_id == chat_id, Message.role == "user")
+            )
+            user_msg_count = (await db.execute(count_stmt)).scalar() or 0
+
+            # Trigger Redis quiz generation on 5th message (if no active session exists)
+            is_quiz_ready = False
+            if user_msg_count >= 5:
+                
+                is_quiz_ready = True
+
+            response_data = MessageResponse(
+                id=assistant_msg.id,
+                chat_id=assistant_msg.chat_id,
+                role=assistant_msg.role,
+                message=assistant_msg.message,
+                created_at=assistant_msg.created_at,
+                quiz_ready=is_quiz_ready
+            )
             await db.commit()
             return response_data
             

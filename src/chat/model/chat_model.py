@@ -1,16 +1,21 @@
 from datetime import datetime
-from sqlalchemy import ForeignKey, String, DateTime, func, Integer, Column
+from sqlalchemy import ForeignKey, String, DateTime, func, Integer, Column,UUID
 from sqlalchemy.orm import relationship
 from src.database import Base
+import uuid
 
 
 class Chat(Base):
     __tablename__ = "chats"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(
+            UUID(as_uuid=True), 
+            primary_key=True, 
+            default=uuid.uuid4
+        )
 
     user_id = Column(
-        Integer,
+        UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False
     )

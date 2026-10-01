@@ -1,17 +1,23 @@
 from datetime import datetime
-from sqlalchemy import ForeignKey, DateTime, func, Integer, Column
+from sqlalchemy import ForeignKey, DateTime, func,UUID, Integer, Column
 from sqlalchemy.orm import relationship
 from src.database import Base
+import uuid
 
 
 
 class Quiz(Base):
     __tablename__ = "quizzes"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(
+            UUID(as_uuid=True), 
+            primary_key=True, 
+            default=uuid.uuid4
+        )
+        
 
     chat_id = Column(
-        Integer,
+        UUID(as_uuid=True),
         ForeignKey("chats.id", ondelete="CASCADE"),
         unique=True,
         nullable=False

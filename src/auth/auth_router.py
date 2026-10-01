@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from uuid import UUID
 from src.auth.utils.utils import create_access_token, decode_token, verify_password
 from src.config import settings
 from src.database import get_db
@@ -99,7 +99,7 @@ async def get_new_access_token(
             detail="Only refresh tokens are allowed on this endpoint",
         )
 
-    user_id = int(token_data["user"]["user_id"])
+    user_id = UUID(token_data["user"]["user_id"])
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalars().first()
@@ -137,7 +137,7 @@ async def logout(
     if raw_refresh_token:
         token_data = decode_token(raw_refresh_token)
         if token_data and "user" in token_data:
-            user_id = int(token_data["user"]["user_id"])
+            user_id = UUID(token_data["user"]["user_id"])
             result = await db.execute(select(User).where(User.id == user_id))
             user = result.scalars().first()
             if user:

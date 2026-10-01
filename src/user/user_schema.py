@@ -1,7 +1,10 @@
 from datetime import datetime
 import re
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, computed_field
+from uuid import UUID
+from typing import Optional
 
+from src.user.image_utils import public_image_url
 
 class UserBase(BaseModel):
     name: str = Field(min_length=3, max_length=100)
@@ -38,19 +41,26 @@ class UserUpdate(UserBase):
     name: str | None = Field(default=None, min_length=3, max_length=100)
     email: EmailStr | None = Field(default=None)
     
+    
+    
 class UserPasswordUpdate(BaseModel):
     current_password: str
     new_password: str
     
-
+class UsernameUpdate(BaseModel):
+    new_name: str = Field(..., min_length=3, max_length=50)
 
 class UserResponse(BaseModel):
-    id: int
+    id: UUID
     name: str
     email: EmailStr
     created_at: datetime
     updated_at: datetime
-
+    image_file:str | None = Field(default=None)
+    @computed_field
+    @property
+    def img_url(self) -> Optional[str]:
+        return public_image_url(self.image_file)
     model_config = ConfigDict(from_attributes=True)
 
 

@@ -3,7 +3,7 @@ from src.chat.model.message_model import MessageRole
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Column
 from sqlalchemy import Enum as SQLEnum
-
+from uuid import UUID
 
 class MessageBase(BaseModel):
     
@@ -20,7 +20,8 @@ class MessageUpdate(BaseModel):
 
 
 class MessageResponse(MessageBase):
-    id: int
+    id: UUID
     created_at: datetime
     role:str
+    quiz_ready: bool = False
     model_config = ConfigDict(from_attributes=True)

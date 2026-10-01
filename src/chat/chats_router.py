@@ -1,13 +1,14 @@
 from typing import List
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from uuid import UUID
 from src.database import get_db
 from src.chat.schema.chat_schema import ChatCreate, ChatResponse, ChatBase, ChatSessionResponse
 from src.chat.schema.message_schema import MessageCreate, MessageResponse, MessageUpdate
 from src.chat.chat_service import ChatService
 from src.auth.utils.dependencies import AccessTokenBearer 
 from src.ai_model.chat.manager import ai_chat
+
 
 chat_router = APIRouter()
 chat_service = ChatService()
@@ -18,7 +19,7 @@ async def get_chat_sessions(
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer)
 ):
-    current_user_id = int(security["user"]["user_id"])
+    current_user_id = UUID(str(security["user"]["user_id"]))
     return await chat_service.get_chat_sessions(db=db, user_id=current_user_id)
 
 
@@ -28,8 +29,8 @@ async def initialize_chat(
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer)
 ):
-    current_user_id = int(security["user"]["user_id"])
-    ai_response_text = ai_chat(payload.message);
+    current_user_id = UUID(str(security["user"]["user_id"]))
+    ai_response_text =ai_chat(payload.message);
     # ai_response_text = f"this is the ai Response of {payload.message}"
     
     return await chat_service.create_chat_session(
@@ -42,21 +43,22 @@ async def initialize_chat(
 
 @chat_router.post("/{chat_id}/msg", status_code=status.HTTP_201_CREATED, response_model=MessageResponse)
 async def continue_chat(
-    chat_id: int,
+    chat_id: UUID,
     payload: MessageCreate, 
     db: AsyncSession = Depends(get_db),
-    security=Depends(access_token_bearer)
+    security=Depends(access_token_bearer),
 ):
-    current_user_id = int(security["user"]["user_id"])
-    ai_response_text = ai_chat(payload.message);
-    # ai_response_text = f"this is the response of the {payload.message}"
+    current_user_id = UUID(str(security["user"]["user_id"]))
+    # ai_response_text = ai_chat(payload.message);
+    ai_response_text = f"this is the response of the {payload.message}"
     
     response = await chat_service.add_messages_to_existing_chat(
         db=db,
         chat_id=chat_id,
         user_id=current_user_id,
         user_text=payload.message,
-        assistant_text=ai_response_text
+        assistant_text=ai_response_text,
+         # Pass function reference, called only on success
     )
     if not response:
         raise HTTPException(
@@ -68,12 +70,12 @@ async def continue_chat(
 
 @chat_router.get("/{chat_id}", status_code=status.HTTP_200_OK, response_model=ChatResponse)
 async def get_all_messages(
-    chat_id: int,
+    chat_id: UUID,
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer)
 ):
-    current_user_id = int(security["user"]["user_id"])
-    
+    current_user_id = UUID(str(security["user"]["user_id"]))
+
     chat_history = await chat_service.get_chat_with_history(
         db=db, 
         chat_id=chat_id, 
@@ -91,11 +93,11 @@ async def get_all_messages(
 
 @chat_router.get("/{chat_id}/latest_user_messages", status_code=status.HTTP_200_OK, response_model=List[MessageResponse])
 async def get_latest_user_messages(
-    chat_id: int,
+    chat_id: UUID,
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer)
 ):
-    current_user_id = int(security["user"]["user_id"])
+    current_user_id = UUID(str(security["user"]["user_id"]))
     latest_messages = await chat_service.get_latest_chat(
         db=db, 
         chat_id=chat_id, 
@@ -113,12 +115,12 @@ async def get_latest_user_messages(
 
 @chat_router.patch("/{chat_id}", response_model=ChatBase)
 async def update_title(
-    chat_id: int,
+    chat_id: UUID,
     payload: ChatBase,
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer)
 ):
-    current_user_id = int(security["user"]["user_id"])
+    current_user_id = UUID(str(security["user"]["user_id"]))
     updated_chat = await chat_service.update_chat_title(
         db=db, 
         chat_id=chat_id, 
@@ -135,11 +137,11 @@ async def update_title(
 
 @chat_router.delete("/{chat_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_chat(
-    chat_id: int,
+    chat_id: UUID,
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer)
 ):
-    current_user_id = int(security["user"]["user_id"])
+    current_user_id = UUID(str(security["user"]["user_id"]))
     success = await chat_service.delete_chat(
         db=db, 
         chat_id=chat_id, 
@@ -154,15 +156,14 @@ async def delete_chat(
 
 @chat_router.patch("/{chat_id}/{message_id}", response_model=MessageResponse)
 async def update_message(
-    chat_id: int,
-    message_id: int,
+    chat_id: UUID,
+    message_id: UUID,
     payload: MessageUpdate,
     db: AsyncSession = Depends(get_db),
-    security=Depends(access_token_bearer)
+    security=Depends(access_token_bearer),
+    
 ):
-    current_user_id = int(security["user"]["user_id"])
-    ai_response_text = ai_chat(payload.message);
-    # ai_response_text = f"this is the updated response for: {payload.message}"
+    current_user_id = UUID(str(security["user"]["user_id"]))
 
     updated_response = await chat_service.update_message_in_chat(
         db=db,
@@ -170,7 +171,8 @@ async def update_message(
         message_id=message_id,
         user_id=current_user_id,
         new_user_text=payload.message,
-        new_assistant_text=ai_response_text
+        ai_chat_func=ai_chat,
+        
     )
 
     if not updated_response:

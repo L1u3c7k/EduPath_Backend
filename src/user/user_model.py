@@ -1,16 +1,18 @@
 from datetime import datetime
-from sqlalchemy import String, DateTime, func, Integer, Column
-from sqlalchemy.orm import relationship
+from sqlalchemy import String, DateTime, func, Column, UUID
+from sqlalchemy.orm import relationship, mapped_column, Mapped
 from src.database import Base
-
-
-
+import uuid
 
 
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(
+        UUID(as_uuid=True), 
+        primary_key=True, 
+        default=uuid.uuid4
+    )
     
     name = Column(String(100), nullable=False)
     
@@ -20,6 +22,16 @@ class User(Base):
         nullable=False, 
         index=True
     )
+    image_file: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
+        default=None,
+    )
+    @property
+    def image_path(self) -> str | None:
+        from src.user.image_utils import public_image_url
+
+        return public_image_url(self.image_file)
     
     password = Column(String(255), nullable=False)
     

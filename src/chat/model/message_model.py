@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import ForeignKey, String, DateTime, func, Integer, Column,Enum as SQLEnum
+from sqlalchemy import ForeignKey, String, DateTime, func, Integer, Column,Enum as SQLEnum,UUID
 from sqlalchemy.orm import relationship
 from src.database import Base
 from enum import Enum
+import uuid
 
 class MessageRole(str, Enum):
     USER = "user"
@@ -14,10 +15,14 @@ class MessageRole(str, Enum):
 class Message(Base):
     __tablename__ = "messages"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(
+            UUID(as_uuid=True), 
+            primary_key=True, 
+            default=uuid.uuid4
+        )
 
     chat_id = Column(
-        Integer,
+        UUID(as_uuid=True),
         ForeignKey("chats.id", ondelete="CASCADE"),
         index=True,
         nullable=False
