@@ -3,6 +3,7 @@ import logging
 from uuid import UUID
 from fastapi import HTTPException, status
 import redis.asyncio as redis
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.quiz.quiz_model import Quiz
 from src.question.question_model import Question
@@ -159,9 +160,17 @@ class QuizService:
             raise ValueError("Cannot save a quiz until all questions are finished.")
 
         try:
-            quiz_record = Quiz(chat_id=chat_id)
-            db.add(quiz_record)
-            await db.flush()  # Assigns the quiz ID before question rows are created.
+            # A chat has one Quiz row (chat_id is unique). Reuse it for later
+            # completed Redis sessions so new questions append to that quiz.
+            result = await db.execute(
+                select(Quiz).where(Quiz.chat_id == chat_id)
+            )
+            quiz_record = result.scalar_one_or_none()
+
+            if quiz_record is None:
+                quiz_record = Quiz(chat_id=chat_id)
+                db.add(quiz_record)
+                await db.flush()  # Assigns the quiz ID before question rows are created.
 
             question_objects = [
                 Question(
