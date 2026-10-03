@@ -1,7 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
-from sqlalchemy import ForeignKey, String, DateTime, func, Integer, Column,Enum as SQLEnum,UUID
+from sqlalchemy import (
+    ForeignKey,
+    String,
+    DateTime,
+    func,
+    Integer,
+    Column,
+    Enum as SQLEnum, UUID
+)
 from sqlalchemy.orm import relationship
 from src.database import Base
 from enum import Enum
@@ -10,7 +17,7 @@ import uuid
 class MessageRole(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
-    
+
 
 class Message(Base):
     __tablename__ = "messages"
@@ -28,9 +35,31 @@ class Message(Base):
         nullable=False
     )
 
-    role = Column(SQLEnum(MessageRole), nullable=False, default=MessageRole.USER)
+    role = Column(
+        SQLEnum(MessageRole),
+        nullable=False,
+        default=MessageRole.USER
+    )
 
-    message = Column(String, nullable=False)
+    message = Column(
+        String,
+        nullable=False
+    )
+
+    chapter = Column(
+        String(255),
+        nullable=True
+    )
+
+    topic = Column(
+        String(255),
+        nullable=True
+    )
+
+    subtopic = Column(
+        String(255),
+        nullable=True
+    )
 
     created_at = Column(
         DateTime(timezone=True),

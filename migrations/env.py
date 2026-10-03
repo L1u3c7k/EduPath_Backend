@@ -31,25 +31,36 @@ except ImportError as e:
     logger.warning(f"Could not import src.chat.model: {e}")
 
 try:
-    import src.quiz.quiz_model
+    import src.quiz.model.quiz_model
 except ImportError as e:
-    logger.warning(f"Could not import src.quiz.quiz_model: {e}")
-
+    logger.warning(f"Could not import src.quiz.model.quiz_model: {e}")
+try:
+    import src.quiz.model.quiz_attempt_model
+except ImportError as e:
+    logger.warning(f"Could not import src.quiz.model.quiz_attempt_model: {e}")
+try:
+    import src.quiz.model.quiz_attempt_model
+except ImportError as e:
+    logger.warning(f"Could not import src.quiz.model.quiz_attempt_model: {e}")
 try:
     import src.user.user_model
 except ImportError as e:
     logger.warning(f"Could not import src.user.user_model: {e}")
 
 try:
-    import src.question.question_model
+    import src.question.model.question_model
 except ImportError as e:
-    logger.warning(f"Could not import src.question.question_model: {e}")
+    logger.warning(f"Could not import src.question.model.question_model: {e}")
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Alembic Config object
 config = context.config
 
 # Setup database URL dynamically from settings
 raw_url = str(settings.DATABASE_URL)
+
 
 # DEBUG PRINT: Verify exact hostname being passed to asyncpg
 parsed = urlparse(raw_url)
@@ -86,6 +97,7 @@ target_metadata = Base.metadata
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
     url = config.get_main_option("sqlalchemy.url")
+
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -111,23 +123,30 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    """Run migrations in 'online' mode with an async engine."""
+    """Run migrations using the provided connection with an async engine."""
     connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        config.get_section(
+            config.config_ini_section,
+            {},
+        ),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
         connect_args=build_connect_args(str(settings.DATABASE_URL)),
     )
 
     async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
+        await connection.run_sync(
+            do_run_migrations
+        )
 
     await connectable.dispose()
 
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    asyncio.run(run_async_migrations())
+    asyncio.run(
+        run_async_migrations()
+    )
 
 
 if context.is_offline_mode():

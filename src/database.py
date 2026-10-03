@@ -52,8 +52,8 @@ AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     autoflush=False,
     autocommit=False,
-    class_=AsyncSession,
-    expire_on_commit=False,  # Prevents unnecessary re-queries after commit
+    expire_on_commit=False,
+    class_=AsyncSession,  # This tells it to generate async sessions
 )
 
 

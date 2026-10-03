@@ -11,6 +11,4 @@ ENV/
 # OS generated files
 .DS_Store
 Thumbs.db
-migration
-
-alembic.ini
+migrationmigrations/versions_old/
