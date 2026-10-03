@@ -373,6 +373,10 @@ async def update_message(
 # QUIZ APIs
 # ============================================================
 
+# ------------------------------------------------------------
+# Create or extend quiz
+# ------------------------------------------------------------
+
 @chat_router.post(
     "/{chat_id}/quiz",
     status_code=status.HTTP_201_CREATED,
@@ -433,71 +437,6 @@ async def create_or_extend_quiz(
 
 
 # ------------------------------------------------------------
-# Get ALL quizzes for a chat
-# ------------------------------------------------------------
-
-@chat_router.get(
-    "/{chat_id}/quizzes",
-    status_code=status.HTTP_200_OK,
-    response_model=List[QuizDetailResponse],
-)
-async def get_chat_quizzes(
-    chat_id: int,
-    db: AsyncSession = Depends(get_db),
-    security=Depends(access_token_bearer),
-):
-    current_user_id = int(
-        security["user"]["user_id"]
-    )
-
-    # --------------------------------------------------
-    # Verify chat ownership
-    # --------------------------------------------------
-
-    chat = await chat_service.get_chat_with_history(
-        db=db,
-        chat_id=chat_id,
-        user_id=current_user_id,
-    )
-
-    if not chat:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                f"Chat session with ID "
-                f"{chat_id} not found."
-            ),
-        )
-
-    # --------------------------------------------------
-    # Get all quizzes for this chat
-    # --------------------------------------------------
-
-    result = await db.execute(
-        select(Quiz)
-        .options(
-            selectinload(Quiz.questions)
-        )
-        .where(
-            Quiz.chat_id == chat_id
-        )
-        .order_by(
-            Quiz.created_at
-        )
-    )
-
-    quizzes = result.scalars().unique().all()
-
-    # Keep questions ordered
-    for quiz in quizzes:
-        quiz.questions.sort(
-            key=lambda question: question.question_number
-        )
-
-    return quizzes
-
-
-# ------------------------------------------------------------
 # Get ONE specific quiz from a specific chat
 # ------------------------------------------------------------
 
@@ -517,7 +456,7 @@ async def get_quiz_by_id(
     )
 
     # --------------------------------------------------
-    # Verify that the chat belongs to the current user
+    # Verify chat ownership
     # --------------------------------------------------
 
     chat = await chat_service.get_chat_with_history(
@@ -568,17 +507,90 @@ async def get_quiz_by_id(
 
     return quiz
 
+
+# ------------------------------------------------------------
+# Get ONE specific question from a specific quiz
+# ------------------------------------------------------------
+
+@chat_router.get(
+    "/{chat_id}/quiz/{quiz_id}/question/{question_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=QuizQuestionResponse,
+)
+async def get_quiz_question(
+    chat_id: int,
+    quiz_id: int,
+    question_id: int,
+    db: AsyncSession = Depends(get_db),
+    security=Depends(access_token_bearer),
+):
+    current_user_id = int(
+        security["user"]["user_id"]
+    )
+
+    # --------------------------------------------------
+    # Verify chat ownership
+    # --------------------------------------------------
+
+    chat = await chat_service.get_chat_with_history(
+        db=db,
+        chat_id=chat_id,
+        user_id=current_user_id,
+    )
+
+    if not chat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Chat session with ID "
+                f"{chat_id} not found."
+            ),
+        )
+
+    # --------------------------------------------------
+    # Get the specific question
+    # --------------------------------------------------
+
+    result = await db.execute(
+        select(Question)
+        .join(
+            Quiz,
+            Question.quiz_id == Quiz.id,
+        )
+        .where(
+            Question.id == question_id,
+            Question.quiz_id == quiz_id,
+            Quiz.chat_id == chat_id,
+        )
+    )
+
+    question = result.scalar_one_or_none()
+
+    if question is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Question with ID {question_id} "
+                f"was not found in quiz {quiz_id} "
+                f"of chat {chat_id}."
+            ),
+        )
+
+    return question
+
+
 # ------------------------------------------------------------
 # Submit quiz answer
 # ------------------------------------------------------------
 
 @chat_router.post(
-    "/{chat_id}/quiz/{question_id}/answer",
+    "/{chat_id}/quiz/{quiz_id}/question/{question_id}/answer",
     status_code=status.HTTP_200_OK,
     response_model=QuizAnswerResponse,
 )
 async def submit_quiz_answer(
     chat_id: int,
+    quiz_id: int,
     question_id: int,
     payload: QuizAnswerRequest,
     db: AsyncSession = Depends(get_db),
@@ -608,7 +620,7 @@ async def submit_quiz_answer(
         )
 
     # --------------------------------------------------
-    # Get quiz
+    # Get the specific quiz
     # --------------------------------------------------
 
     quiz = await get_quiz(
@@ -623,6 +635,19 @@ async def submit_quiz_answer(
         )
 
     # --------------------------------------------------
+    # Verify that the requested quiz belongs to this chat
+    # --------------------------------------------------
+
+    if quiz.id != quiz_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Quiz with ID {quiz_id} "
+                f"was not found in chat {chat_id}."
+            ),
+        )
+
+    # --------------------------------------------------
     # Get requested question
     # --------------------------------------------------
 
@@ -630,7 +655,7 @@ async def submit_quiz_answer(
         select(Question)
         .where(
             Question.id == question_id,
-            Question.quiz_id == quiz.id,
+            Question.quiz_id == quiz_id,
         )
     )
 
@@ -639,7 +664,10 @@ async def submit_quiz_answer(
     if question is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Question not found.",
+            detail=(
+                f"Question with ID {question_id} "
+                f"was not found in quiz {quiz_id}."
+            ),
         )
 
     # --------------------------------------------------
@@ -660,5 +688,3 @@ async def submit_quiz_answer(
         )
 
     await db.commit()
-
-    return result
