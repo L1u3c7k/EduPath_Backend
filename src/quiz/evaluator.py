@@ -32,11 +32,11 @@ Rules:
 
 Return exactly:
 
-{
+{{
     "is_correct": true,
     "feedback": "Explanation of why the answer is correct or incorrect.",
     "hint": "A useful hint for the student."
-}
+}}
 
 If the answer is correct, "hint" should be null.
 """
@@ -57,64 +57,71 @@ def evaluate_answer(
         user_answer=user_answer,
     )
 
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        temperature=0,
-    )
-
-    if not response.choices:
-        print(response)
-        return None
-
-    content = (
-        response.choices[0]
-        .message
-        .content
-        .strip()
-    )
-
     try:
-        result = json.loads(content)
-    except json.JSONDecodeError:
-        print(
-            "⚠️ Quiz evaluator returned invalid JSON:"
+
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0,
         )
-        print(content)
+
+        if not response.choices:
+            print("⚠️ Quiz evaluator returned no choices.")
+            print(response)
+            return None
+
+        content = (
+            response.choices[0]
+            .message
+            .content
+            .strip()
+        )
+
+        try:
+            result = json.loads(content)
+
+        except json.JSONDecodeError:
+            print(
+                "⚠️ Quiz evaluator returned invalid JSON:"
+            )
+            print(content)
+            return None
+
+        if not isinstance(result, dict):
+            return None
+
+        if "is_correct" not in result:
+            return None
+
+        if not isinstance(
+            result["is_correct"],
+            bool
+        ):
+            return None
+
+        feedback = result.get("feedback")
+
+        if not isinstance(feedback, str):
+            return None
+
+        hint = result.get("hint")
+
+        if hint is not None and not isinstance(hint, str):
+            return None
+
+        return {
+            "is_correct": result["is_correct"],
+            "feedback": feedback,
+            "hint": hint,
+        }
+
+    except Exception as e:
+        print(
+            f"⚠️ Quiz evaluator exception: {e}"
+        )
         return None
-
-    if not isinstance(result, dict):
-        return None
-
-    if "is_correct" not in result:
-        return None
-
-    if not isinstance(
-        result["is_correct"],
-        bool,
-    ):
-        return None
-
-    feedback = result.get("feedback")
-
-    if not isinstance(feedback, str):
-        return None
-
-    hint = result.get("hint")
-
-    if hint is not None and not isinstance(
-        hint,
-        str,
-    ):
-        return None
-
-    return {
-        "is_correct": result["is_correct"],
-        "feedback": feedback,
-        "hint": hint,
-    }

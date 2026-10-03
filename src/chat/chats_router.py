@@ -3,6 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from src.database import get_db
 
@@ -24,17 +25,22 @@ from src.auth.utils.dependencies import AccessTokenBearer
 
 from src.ai_model.chat.manager import ai_chat
 
-from src.quiz.schema.quiz_schema import QuizResponse
+from src.quiz.schema.quiz_schema import (
+    QuizDetailResponse,
+)
+
+from src.quiz.model.quiz_model import Quiz
+
 from src.question.schema.question_schema import (
     QuizQuestionResponse,
     QuizAnswerRequest,
     QuizAnswerResponse,
 )
+
 from src.question.model.question_model import Question
 
 from src.quiz.quiz_service import (
     get_quiz,
-    get_current_question,
     generate_quiz_batch,
     answer_question,
 )
@@ -46,6 +52,10 @@ chat_service = ChatService()
 access_token_bearer = AccessTokenBearer()
 
 
+# ============================================================
+# CHAT APIs
+# ============================================================
+
 @chat_router.get(
     "/",
     status_code=status.HTTP_200_OK,
@@ -55,7 +65,9 @@ async def get_chat_sessions(
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer),
 ):
-    current_user_id = int(security["user"]["user_id"])
+    current_user_id = int(
+        security["user"]["user_id"]
+    )
 
     return await chat_service.get_chat_sessions(
         db=db,
@@ -73,7 +85,9 @@ async def initialize_chat(
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer),
 ):
-    current_user_id = int(security["user"]["user_id"])
+    current_user_id = int(
+        security["user"]["user_id"]
+    )
 
     # New chat has no subject yet.
     # AI determines the subject and hierarchy from RAG.
@@ -108,7 +122,9 @@ async def continue_chat(
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer),
 ):
-    current_user_id = int(security["user"]["user_id"])
+    current_user_id = int(
+        security["user"]["user_id"]
+    )
 
     # First verify that this chat belongs to the current user.
     chat_history = await chat_service.get_chat_with_history(
@@ -120,7 +136,10 @@ async def continue_chat(
     if not chat_history:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Chat session with ID {chat_id} not found.",
+            detail=(
+                f"Chat session with ID "
+                f"{chat_id} not found."
+            ),
         )
 
     # The chat's subject is the permanent subject boundary.
@@ -149,7 +168,10 @@ async def continue_chat(
     if not response:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Chat session with ID {chat_id} not found.",
+            detail=(
+                f"Chat session with ID "
+                f"{chat_id} not found."
+            ),
         )
 
     return response
@@ -165,7 +187,9 @@ async def get_all_messages(
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer),
 ):
-    current_user_id = int(security["user"]["user_id"])
+    current_user_id = int(
+        security["user"]["user_id"]
+    )
 
     chat_history = await chat_service.get_chat_with_history(
         db=db,
@@ -176,7 +200,10 @@ async def get_all_messages(
     if not chat_history:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Chat session with ID {chat_id} not found.",
+            detail=(
+                f"Chat session with ID "
+                f"{chat_id} not found."
+            ),
         )
 
     return chat_history
@@ -192,7 +219,9 @@ async def get_latest_user_messages(
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer),
 ):
-    current_user_id = int(security["user"]["user_id"])
+    current_user_id = int(
+        security["user"]["user_id"]
+    )
 
     latest_messages = await chat_service.get_latest_chat(
         db=db,
@@ -222,7 +251,9 @@ async def update_title(
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer),
 ):
-    current_user_id = int(security["user"]["user_id"])
+    current_user_id = int(
+        security["user"]["user_id"]
+    )
 
     updated_chat = await chat_service.update_chat_title(
         db=db,
@@ -234,7 +265,10 @@ async def update_title(
     if not updated_chat:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Chat with ID {chat_id} not found.",
+            detail=(
+                f"Chat with ID "
+                f"{chat_id} not found."
+            ),
         )
 
     return updated_chat
@@ -249,7 +283,9 @@ async def delete_chat(
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer),
 ):
-    current_user_id = int(security["user"]["user_id"])
+    current_user_id = int(
+        security["user"]["user_id"]
+    )
 
     success = await chat_service.delete_chat(
         db=db,
@@ -260,7 +296,10 @@ async def delete_chat(
     if not success:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Chat with ID {chat_id} not found.",
+            detail=(
+                f"Chat with ID "
+                f"{chat_id} not found."
+            ),
         )
 
 
@@ -275,7 +314,9 @@ async def update_message(
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer),
 ):
-    current_user_id = int(security["user"]["user_id"])
+    current_user_id = int(
+        security["user"]["user_id"]
+    )
 
     # First verify ownership and get the chat subject.
     chat_history = await chat_service.get_chat_with_history(
@@ -287,7 +328,10 @@ async def update_message(
     if not chat_history:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Chat session with ID {chat_id} not found.",
+            detail=(
+                f"Chat session with ID "
+                f"{chat_id} not found."
+            ),
         )
 
     current_subject = chat_history.subject
@@ -323,6 +367,11 @@ async def update_message(
         )
 
     return updated_response
+
+
+# ============================================================
+# QUIZ APIs
+# ============================================================
 
 @chat_router.post(
     "/{chat_id}/quiz",
@@ -383,12 +432,16 @@ async def create_or_extend_quiz(
     return question
 
 
+# ------------------------------------------------------------
+# Get ALL quizzes for a chat
+# ------------------------------------------------------------
+
 @chat_router.get(
-    "/{chat_id}/quiz",
+    "/{chat_id}/quizzes",
     status_code=status.HTTP_200_OK,
-    response_model=QuizResponse,
+    response_model=List[QuizDetailResponse],
 )
-async def get_chat_quiz(
+async def get_chat_quizzes(
     chat_id: int,
     db: AsyncSession = Depends(get_db),
     security=Depends(access_token_bearer),
@@ -416,88 +469,108 @@ async def get_chat_quiz(
             ),
         )
 
-    quiz = await get_quiz(
+    # --------------------------------------------------
+    # Get all quizzes for this chat
+    # --------------------------------------------------
+
+    result = await db.execute(
+        select(Quiz)
+        .options(
+            selectinload(Quiz.questions)
+        )
+        .where(
+            Quiz.chat_id == chat_id
+        )
+        .order_by(
+            Quiz.created_at
+        )
+    )
+
+    quizzes = result.scalars().unique().all()
+
+    # Keep questions ordered
+    for quiz in quizzes:
+        quiz.questions.sort(
+            key=lambda question: question.question_number
+        )
+
+    return quizzes
+
+
+# ------------------------------------------------------------
+# Get ONE specific quiz from a specific chat
+# ------------------------------------------------------------
+
+@chat_router.get(
+    "/{chat_id}/quiz/{quiz_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=QuizDetailResponse,
+)
+async def get_quiz_by_id(
+    chat_id: int,
+    quiz_id: int,
+    db: AsyncSession = Depends(get_db),
+    security=Depends(access_token_bearer),
+):
+    current_user_id = int(
+        security["user"]["user_id"]
+    )
+
+    # --------------------------------------------------
+    # Verify that the chat belongs to the current user
+    # --------------------------------------------------
+
+    chat = await chat_service.get_chat_with_history(
         db=db,
         chat_id=chat_id,
+        user_id=current_user_id,
     )
+
+    if not chat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Chat session with ID "
+                f"{chat_id} not found."
+            ),
+        )
+
+    # --------------------------------------------------
+    # Get the specific quiz belonging to this chat
+    # --------------------------------------------------
+
+    result = await db.execute(
+        select(Quiz)
+        .options(
+            selectinload(Quiz.questions)
+        )
+        .where(
+            Quiz.id == quiz_id,
+            Quiz.chat_id == chat_id,
+        )
+    )
+
+    quiz = result.scalar_one_or_none()
 
     if quiz is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Quiz has not been created yet.",
+            detail=(
+                f"Quiz with ID {quiz_id} "
+                f"was not found in chat {chat_id}."
+            ),
         )
+
+    # Keep questions ordered
+    quiz.questions.sort(
+        key=lambda question: question.question_number
+    )
 
     return quiz
 
-
-@chat_router.get(
-    "/{chat_id}/quiz/current",
-    status_code=status.HTTP_200_OK,
-    response_model=QuizQuestionResponse,
-)
-async def get_current_quiz_question(
-    chat_id: int,
-    db: AsyncSession = Depends(get_db),
-    security=Depends(access_token_bearer),
-):
-    current_user_id = int(
-        security["user"]["user_id"]
-    )
-
-    # --------------------------------------------------
-    # Verify chat ownership
-    # --------------------------------------------------
-
-    chat = await chat_service.get_chat_with_history(
-        db=db,
-        chat_id=chat_id,
-        user_id=current_user_id,
-    )
-
-    if not chat:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                f"Chat session with ID "
-                f"{chat_id} not found."
-            ),
-        )
-
-    # --------------------------------------------------
-    # Get quiz
-    # --------------------------------------------------
-
-    quiz = await get_quiz(
-        db=db,
-        chat_id=chat_id,
-    )
-
-    if quiz is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Quiz has not been created yet.",
-        )
-
-    # --------------------------------------------------
-    # Get current question
-    # --------------------------------------------------
-
-    question = await get_current_question(
-        db=db,
-        quiz=quiz,
-    )
-
-    if question is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                "There is no current question. "
-                "Generate another quiz batch."
-            ),
-        )
-
-    return question
-
+# ------------------------------------------------------------
+# Submit quiz answer
+# ------------------------------------------------------------
 
 @chat_router.post(
     "/{chat_id}/quiz/{question_id}/answer",
@@ -550,7 +623,7 @@ async def submit_quiz_answer(
         )
 
     # --------------------------------------------------
-    # Get the requested question
+    # Get requested question
     # --------------------------------------------------
 
     result = await db.execute(
@@ -570,22 +643,7 @@ async def submit_quiz_answer(
         )
 
     # --------------------------------------------------
-    # Make sure this is the current question
-    # --------------------------------------------------
-
-    if (
-        question.question_number
-        != quiz.current_question
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "This is not the current quiz question."
-            ),
-        )
-
-    # --------------------------------------------------
-    # Evaluate and save the attempt
+    # Evaluate and save attempt
     # --------------------------------------------------
 
     result = await answer_question(

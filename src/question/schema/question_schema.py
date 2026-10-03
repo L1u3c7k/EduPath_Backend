@@ -1,6 +1,11 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+)
 
 
 class QuestionResponse(BaseModel):
@@ -29,6 +34,18 @@ class QuizAnswerRequest(BaseModel):
         min_length=1
     )
 
+    @field_validator("answer")
+    @classmethod
+    def validate_answer(cls, value: str) -> str:
+        value = value.strip()
+
+        if not value:
+            raise ValueError(
+                "Answer cannot be empty."
+            )
+
+        return value
+
 
 class QuizAnswerResponse(BaseModel):
     correct: bool
@@ -36,7 +53,6 @@ class QuizAnswerResponse(BaseModel):
     hint: str | None = None
     question_completed: bool
     quiz_completed: bool
-    next_question: QuizQuestionResponse | None = None
 
     # Only returned after 3 incorrect attempts.
     model_answer: str | None = None

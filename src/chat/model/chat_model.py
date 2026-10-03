@@ -37,9 +37,10 @@ class Chat(Base):
     )
 
     quiz = relationship(
-        "Quiz", 
-        back_populates="chat", 
-        uselist=False
+        "Quiz",
+        back_populates="chat",
+        uselist=False,
+        cascade="all, delete-orphan",
     )
 
     messages = relationship(

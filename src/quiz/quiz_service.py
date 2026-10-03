@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,24 +61,27 @@ async def get_quiz(
 
 
 # ============================================================
-# GET CURRENT QUESTION
+# GET EXISTING QUESTIONS
 # ============================================================
 
-async def get_current_question(
+async def get_existing_questions(
     db: AsyncSession,
-    quiz: Quiz,
-) -> Question | None:
+    quiz_id: int,
+) -> list[Question]:
 
     result = await db.execute(
         select(Question)
         .where(
-            Question.quiz_id == quiz.id,
+            Question.quiz_id == quiz_id
+        )
+        .order_by(
             Question.question_number
-            == quiz.current_question,
         )
     )
 
-    return result.scalar_one_or_none()
+    return list(
+        result.scalars().all()
+    )
 
 
 # ============================================================
@@ -97,36 +102,12 @@ async def generate_quiz_batch(
     # --------------------------------------------------------
 
     quiz = await get_quiz(
-        db,
-        chat.id,
+        db=db,
+        chat_id=chat.id,
     )
 
     # --------------------------------------------------------
-    # IMPORTANT:
-    # If a current question already exists,
-    # do NOT generate another batch.
-    #
-    # This allows the frontend to safely call
-    # POST /{chat_id}/quiz multiple times without
-    # creating duplicate questions.
-    # --------------------------------------------------------
-
-    if quiz is not None:
-
-        current_question = await get_current_question(
-            db=db,
-            quiz=quiz,
-        )
-
-        if current_question is not None:
-            return (
-                quiz,
-                current_question,
-                None,
-            )
-
-    # --------------------------------------------------------
-    # Determine which messages have already been used
+    # Determine the last processed message
     # --------------------------------------------------------
 
     last_message_id = None
@@ -135,13 +116,16 @@ async def generate_quiz_batch(
         last_message_id = quiz.last_message_id
 
     # --------------------------------------------------------
-    # Get new chat messages
+    # Get the next batch of unprocessed messages
+    #
+    # history.py returns the FIRST 5 messages after
+    # last_message_id, so older messages are never skipped.
     # --------------------------------------------------------
 
     messages = await get_quiz_messages(
-        db,
-        chat.id,
-        last_message_id,
+        db=db,
+        chat_id=chat.id,
+        last_message_id=last_message_id,
     )
 
     # --------------------------------------------------------
@@ -149,6 +133,7 @@ async def generate_quiz_batch(
     # --------------------------------------------------------
 
     if len(messages) < BATCH_SIZE:
+
         return (
             quiz,
             None,
@@ -157,7 +142,27 @@ async def generate_quiz_batch(
         )
 
     # --------------------------------------------------------
-    # Format history for LLM
+    # Get existing questions
+    # --------------------------------------------------------
+
+    existing_questions = []
+
+    if quiz is not None:
+
+        existing_questions = (
+            await get_existing_questions(
+                db=db,
+                quiz_id=quiz.id,
+            )
+        )
+
+    existing_question_texts = [
+        question.question
+        for question in existing_questions
+    ]
+
+    # --------------------------------------------------------
+    # Format new message batch
     # --------------------------------------------------------
 
     chat_history = format_chat_history(
@@ -165,19 +170,61 @@ async def generate_quiz_batch(
     )
 
     # --------------------------------------------------------
-    # Generate 5 questions
+    # Generate up to 5 new questions
     # --------------------------------------------------------
 
-    generated_questions = generate_quiz_questions(
-        chat_history
+    generated_questions = (
+        generate_quiz_questions(
+            chat_history=chat_history,
+            existing_questions=(
+                existing_question_texts
+            ),
+        )
     )
 
-    if len(generated_questions) != BATCH_SIZE:
+    # --------------------------------------------------------
+    # GENERATION FAILURE
+    #
+    # None means the LLM/API failed.
+    #
+    # IMPORTANT:
+    # Do NOT advance last_message_id.
+    #
+    # This allows the same messages to be retried later.
+    # --------------------------------------------------------
+
+    if generated_questions is None:
+
         return (
             quiz,
             None,
-            "The quiz generator did not return "
-            "exactly 5 questions.",
+            "Quiz generation failed. "
+            "Please try again.",
+        )
+
+    # --------------------------------------------------------
+    # NO NEW QUESTIONS
+    #
+    # [] means generation succeeded, but the LLM found
+    # no genuinely new questions.
+    #
+    # These messages have been successfully processed,
+    # so we can advance the cursor.
+    # --------------------------------------------------------
+
+    if not generated_questions:
+
+        if quiz is not None:
+
+            quiz.last_message_id = messages[-1].id
+
+            await db.flush()
+
+        return (
+            quiz,
+            None,
+            "No new quiz questions could be generated "
+            "from the new material.",
         )
 
     # --------------------------------------------------------
@@ -188,7 +235,6 @@ async def generate_quiz_batch(
 
         quiz = Quiz(
             chat_id=chat.id,
-            current_question=1,
             last_message_id=messages[-1].id,
         )
 
@@ -199,8 +245,9 @@ async def generate_quiz_batch(
         starting_number = 1
 
     # --------------------------------------------------------
-    # Existing quiz:
-    # generate questions after the previous batch
+    # Existing quiz
+    #
+    # Continue question numbering.
     # --------------------------------------------------------
 
     else:
@@ -224,6 +271,15 @@ async def generate_quiz_batch(
             (last_question_number or 0)
             + 1
         )
+
+        # ----------------------------------------------------
+        # A new batch makes the quiz incomplete again.
+        #
+        # This matters if the previous batch had already
+        # completed the quiz.
+        # ----------------------------------------------------
+
+        quiz.completed_at = None
 
     # --------------------------------------------------------
     # Save generated questions
@@ -249,7 +305,7 @@ async def generate_quiz_batch(
         questions.append(question)
 
     # --------------------------------------------------------
-    # Remember the last chat message used
+    # Advance cursor only after successful generation
     # --------------------------------------------------------
 
     quiz.last_message_id = messages[-1].id
@@ -257,7 +313,10 @@ async def generate_quiz_batch(
     await db.flush()
 
     # --------------------------------------------------------
-    # Return first question of this batch
+    # Return first newly generated question.
+    #
+    # This is NOT a current_question.
+    # Questions can still be answered in any order.
     # --------------------------------------------------------
 
     return (
@@ -278,7 +337,9 @@ async def get_attempt_count(
 
     result = await db.execute(
         select(
-            func.count(QuizAttempt.id)
+            func.count(
+                QuizAttempt.id
+            )
         )
         .where(
             QuizAttempt.question_id
@@ -289,6 +350,102 @@ async def get_attempt_count(
     return int(
         result.scalar() or 0
     )
+
+
+# ============================================================
+# CHECK QUIZ COMPLETION
+# ============================================================
+
+async def is_quiz_completed(
+    db: AsyncSession,
+    quiz_id: int,
+) -> bool:
+
+    # --------------------------------------------------------
+    # Get all question IDs
+    # --------------------------------------------------------
+
+    result = await db.execute(
+        select(Question.id)
+        .where(
+            Question.quiz_id == quiz_id
+        )
+    )
+
+    question_ids = result.scalars().all()
+
+    # A quiz with no questions is not completed.
+    if not question_ids:
+        return False
+
+    # --------------------------------------------------------
+    # Find correctly answered questions
+    # --------------------------------------------------------
+
+    result = await db.execute(
+        select(
+            QuizAttempt.question_id
+        )
+        .where(
+            QuizAttempt.question_id.in_(question_ids),
+            QuizAttempt.is_correct.is_(True),
+        )
+        .distinct()
+    )
+
+    correctly_answered = set(
+        result.scalars().all()
+    )
+
+    # --------------------------------------------------------
+    # Get attempt counts
+    # --------------------------------------------------------
+
+    result = await db.execute(
+        select(
+            QuizAttempt.question_id,
+            func.count(
+                QuizAttempt.id
+            ).label("attempt_count"),
+        )
+        .where(
+            QuizAttempt.question_id.in_(question_ids)
+        )
+        .group_by(
+            QuizAttempt.question_id
+        )
+    )
+
+    attempt_counts = {
+        question_id: attempt_count
+        for question_id, attempt_count
+        in result.all()
+    }
+
+    # --------------------------------------------------------
+    # Every question must be completed.
+    #
+    # A question is completed if:
+    #
+    # 1. It was answered correctly at least once
+    # OR
+    # 2. It reached 3 attempts
+    # --------------------------------------------------------
+
+    for question_id in question_ids:
+
+        if question_id in correctly_answered:
+            continue
+
+        if attempt_counts.get(
+            question_id,
+            0
+        ) >= MAX_ATTEMPTS:
+            continue
+
+        return False
+
+    return True
 
 
 # ============================================================
@@ -320,27 +477,6 @@ async def save_attempt(
 
 
 # ============================================================
-# GET NEXT QUESTION
-# ============================================================
-
-async def get_next_question(
-    db: AsyncSession,
-    quiz: Quiz,
-) -> Question | None:
-
-    result = await db.execute(
-        select(Question)
-        .where(
-            Question.quiz_id == quiz.id,
-            Question.question_number
-            == quiz.current_question,
-        )
-    )
-
-    return result.scalar_one_or_none()
-
-
-# ============================================================
 # ANSWER QUESTION
 # ============================================================
 
@@ -356,8 +492,8 @@ async def answer_question(
     # --------------------------------------------------------
 
     attempts = await get_attempt_count(
-        db,
-        question.id,
+        db=db,
+        question_id=question.id,
     )
 
     # --------------------------------------------------------
@@ -365,6 +501,7 @@ async def answer_question(
     # --------------------------------------------------------
 
     if attempts >= MAX_ATTEMPTS:
+
         return {
             "error": "Maximum attempts reached."
         }
@@ -381,7 +518,14 @@ async def answer_question(
         user_answer=user_answer,
     )
 
+    # --------------------------------------------------------
+    # LLM/API evaluation failure
+    #
+    # Do NOT save an attempt.
+    # --------------------------------------------------------
+
     if evaluation is None:
+
         return {
             "error": "The answer could not be evaluated."
         }
@@ -403,35 +547,40 @@ async def answer_question(
         feedback=feedback,
     )
 
-    # ========================================================
+    # --------------------------------------------------------
     # CORRECT ANSWER
-    # ========================================================
+    #
+    # Question is completed immediately.
+    # --------------------------------------------------------
 
     if is_correct:
 
-        # Move to next question
-        quiz.current_question += 1
-
-        next_question = await get_next_question(
-            db,
-            quiz,
+        quiz_completed = await is_quiz_completed(
+            db=db,
+            quiz_id=quiz.id,
         )
+
+        if quiz_completed:
+
+            quiz.completed_at = datetime.now(
+                timezone.utc
+            )
+
+        await db.flush()
 
         return {
             "correct": True,
             "explanation": feedback,
             "hint": None,
             "question_completed": True,
-            "quiz_completed": (
-                next_question is None
-            ),
-            "next_question": next_question,
+            "quiz_completed": quiz_completed,
+            "next_question": None,
             "model_answer": None,
         }
 
-    # ========================================================
+    # --------------------------------------------------------
     # WRONG ANSWER — ATTEMPTS REMAIN
-    # ========================================================
+    # --------------------------------------------------------
 
     if attempt_number < MAX_ATTEMPTS:
 
@@ -445,28 +594,32 @@ async def answer_question(
             "model_answer": None,
         }
 
-    # ========================================================
+    # --------------------------------------------------------
     # WRONG ANSWER — THIRD ATTEMPT
-    # ========================================================
+    #
+    # Question becomes completed.
+    # Model answer is revealed.
+    # --------------------------------------------------------
 
-    # Third wrong attempt:
-    # reveal the model answer and move on.
-
-    quiz.current_question += 1
-
-    next_question = await get_next_question(
-        db,
-        quiz,
+    quiz_completed = await is_quiz_completed(
+        db=db,
+        quiz_id=quiz.id,
     )
+
+    if quiz_completed:
+
+        quiz.completed_at = datetime.now(
+            timezone.utc
+        )
+
+    await db.flush()
 
     return {
         "correct": False,
         "explanation": feedback,
         "hint": None,
         "question_completed": True,
-        "quiz_completed": (
-            next_question is None
-        ),
-        "next_question": next_question,
+        "quiz_completed": quiz_completed,
+        "next_question": None,
         "model_answer": question.model_answer,
     }

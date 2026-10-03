@@ -13,22 +13,13 @@ from src.database import Base
 class Quiz(Base):
     __tablename__ = "quizzes"
 
-    id = Column(
-        Integer,
-        primary_key=True
-    )
+    id = Column(Integer, primary_key=True)
 
     chat_id = Column(
         Integer,
         ForeignKey("chats.id", ondelete="CASCADE"),
         unique=True,
         nullable=False
-    )
-
-    current_question = Column(
-        Integer,
-        nullable=False,
-        default=1
     )
 
     last_message_id = Column(

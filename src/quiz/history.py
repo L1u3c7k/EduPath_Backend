@@ -15,8 +15,12 @@ async def get_quiz_messages(
 
     query = (
         select(Message)
-        .where(Message.chat_id == chat_id)
-        .order_by(Message.id.desc())
+        .where(
+            Message.chat_id == chat_id
+        )
+        .order_by(
+            Message.id.asc()
+        )
     )
 
     if last_message_id is not None:
@@ -24,10 +28,12 @@ async def get_quiz_messages(
             Message.id > last_message_id
         )
 
+    query = query.limit(
+        QUIZ_MESSAGE_COUNT
+    )
+
     result = await db.execute(query)
 
-    messages = result.scalars().all()
-
-    messages = list(reversed(messages))
-
-    return messages[-QUIZ_MESSAGE_COUNT:]
+    return list(
+        result.scalars().all()
+    )
