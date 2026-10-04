@@ -1,21 +1,29 @@
 from uuid import UUID
 
-from sqlalchemy import select, update, func
+from fastapi import HTTPException, status
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from fastapi import HTTPException, status
 
 from src.chat.model.chat_model import Chat
-from src.chat.model.message_model import Message
+from src.chat.model.message_model import (
+    Message,
+    MessageRole,
+)
 from src.chat.schema.chat_schema import (
-    ChatResponse,
     ChatBase,
     ChatCreate,
+    ChatResponse,
 )
 from src.chat.schema.message_schema import MessageResponse
+from src.quiz.model.quiz_model import Quiz
 
 
 class ChatService:
+
+    # ========================================================
+    # CREATE CHAT
+    # ========================================================
 
     async def create_chat_session(
         self,
@@ -43,7 +51,7 @@ class ChatService:
             )
 
             user_msg = Message(
-                role="user",
+                role=MessageRole.USER,
                 message=user_text,
                 chapter=hierarchy.get("chapter"),
                 topic=hierarchy.get("topic"),
@@ -51,7 +59,7 @@ class ChatService:
             )
 
             assistant_msg = Message(
-                role="assistant",
+                role=MessageRole.ASSISTANT,
                 message=assistant_text,
                 chapter=hierarchy.get("chapter"),
                 topic=hierarchy.get("topic"),
@@ -65,13 +73,19 @@ class ChatService:
 
             await db.flush()
 
+            # ------------------------------------------------
+            # Reload chat with messages.
+            # ------------------------------------------------
+
             statement = (
                 select(Chat)
                 .where(
                     Chat.id == new_chat.id,
                     Chat.user_id == user_id,
                 )
-                .options(selectinload(Chat.messages))
+                .options(
+                    selectinload(Chat.messages)
+                )
             )
 
             result = await db.execute(statement)
@@ -90,6 +104,10 @@ class ChatService:
             await db.rollback()
             raise
 
+    # ========================================================
+    # GET CHAT SESSIONS
+    # ========================================================
+
     async def get_chat_sessions(
         self,
         db: AsyncSession,
@@ -97,13 +115,21 @@ class ChatService:
     ):
         query = (
             select(Chat)
-            .where(Chat.user_id == user_id)
-            .order_by(Chat.created_at.desc())
+            .where(
+                Chat.user_id == user_id
+            )
+            .order_by(
+                Chat.created_at.desc()
+            )
         )
 
         result = await db.execute(query)
 
         return result.scalars().all()
+
+    # ========================================================
+    # GET CHAT WITH HISTORY
+    # ========================================================
 
     async def get_chat_with_history(
         self,
@@ -114,13 +140,19 @@ class ChatService:
 
         statement = (
             select(Chat)
-            .where(Chat.id == chat_id)
-            .options(selectinload(Chat.messages))
+            .where(
+                Chat.id == chat_id
+            )
+            .options(
+                selectinload(Chat.messages)
+            )
         )
 
         result = await db.execute(statement)
 
-        chat_record = result.scalar_one_or_none()
+        chat_record = (
+            result.scalar_one_or_none()
+        )
 
         if not chat_record:
             return None
@@ -134,7 +166,13 @@ class ChatService:
                 ),
             )
 
-        return ChatResponse.model_validate(chat_record)
+        return ChatResponse.model_validate(
+            chat_record
+        )
+
+    # ========================================================
+    # ADD MESSAGES TO EXISTING CHAT
+    # ========================================================
 
     async def add_messages_to_existing_chat(
         self,
@@ -145,18 +183,27 @@ class ChatService:
         assistant_text: str,
         subject: str | None,
         hierarchy: dict | None,
-        redis_client,
     ) -> MessageResponse | None:
 
         try:
+            # ------------------------------------------------
+            # Verify chat ownership.
+            # ------------------------------------------------
+
             chat_stmt = (
                 select(Chat)
-                .where(Chat.id == chat_id)
+                .where(
+                    Chat.id == chat_id
+                )
             )
 
-            chat_result = await db.execute(chat_stmt)
+            chat_result = await db.execute(
+                chat_stmt
+            )
 
-            chat_record = chat_result.scalar_one_or_none()
+            chat_record = (
+                chat_result.scalar_one_or_none()
+            )
 
             if not chat_record:
                 return None
@@ -170,49 +217,190 @@ class ChatService:
                     ),
                 )
 
-            if chat_record.subject is None and subject:
+            # ------------------------------------------------
+            # Preserve the permanent subject boundary.
+            #
+            # Once a chat has a subject, do not replace it.
+            # ------------------------------------------------
+
+            if (
+                chat_record.subject is None
+                and subject
+            ):
                 chat_record.subject = subject
 
             hierarchy = hierarchy or {}
 
+            # ------------------------------------------------
+            # Create user message.
+            # ------------------------------------------------
+
             user_msg = Message(
                 chat_id=chat_id,
-                role="user",
+                role=MessageRole.USER,
                 message=user_text,
                 chapter=hierarchy.get("chapter"),
                 topic=hierarchy.get("topic"),
                 subtopic=hierarchy.get("subtopic"),
             )
 
+            # ------------------------------------------------
+            # Create assistant message.
+            # ------------------------------------------------
+
             assistant_msg = Message(
                 chat_id=chat_id,
-                role="assistant",
+                role=MessageRole.ASSISTANT,
                 message=assistant_text,
                 chapter=hierarchy.get("chapter"),
                 topic=hierarchy.get("topic"),
                 subtopic=hierarchy.get("subtopic"),
             )
 
-            db.add_all([
-                user_msg,
-                assistant_msg,
-            ])
+            db.add_all(
+                [
+                    user_msg,
+                    assistant_msg,
+                ]
+            )
 
             await db.flush()
 
-            count_stmt = (
-                select(func.count(Message.id))
+            # ------------------------------------------------
+            # Determine whether enough NEW user messages exist
+            # for another quiz batch.
+            #
+            # The database cursor belongs to the Quiz record.
+            # ------------------------------------------------
+
+            quiz_stmt = (
+                select(Quiz)
                 .where(
-                    Message.chat_id == chat_id,
-                    Message.role == "user",
+                    Quiz.chat_id == chat_id
                 )
             )
 
-            user_msg_count = (
-                await db.execute(count_stmt)
+            quiz_result = await db.execute(
+                quiz_stmt
+            )
+
+            quiz_record = (
+                quiz_result.scalar_one_or_none()
+            )
+
+            if quiz_record is None:
+                # ------------------------------------------------
+                # No quiz has ever been completed.
+                #
+                # Count all user messages.
+                # ------------------------------------------------
+
+                count_stmt = (
+                    select(
+                        func.count(Message.id)
+                    )
+                    .where(
+                        Message.chat_id == chat_id,
+                        Message.role == MessageRole.USER,
+                    )
+                )
+
+            else:
+                # ------------------------------------------------
+                # A completed quiz exists.
+                #
+                # Count user messages chronologically AFTER
+                # the quiz cursor.
+                # ------------------------------------------------
+
+                if quiz_record.last_message_id is None:
+
+                    count_stmt = (
+                        select(
+                            func.count(Message.id)
+                        )
+                        .where(
+                            Message.chat_id == chat_id,
+                            Message.role == MessageRole.USER,
+                        )
+                    )
+
+                else:
+
+                    cursor_stmt = (
+                        select(Message)
+                        .where(
+                            Message.id
+                            == quiz_record.last_message_id,
+                            Message.chat_id
+                            == chat_id,
+                        )
+                    )
+
+                    cursor_result = await db.execute(
+                        cursor_stmt
+                    )
+
+                    cursor_message = (
+                        cursor_result.scalar_one_or_none()
+                    )
+
+                    if cursor_message is None:
+
+                        # ------------------------------------------------
+                        # Invalid/missing cursor.
+                        #
+                        # Safest behavior is to count all user messages
+                        # rather than silently claiming a batch exists.
+                        # ------------------------------------------------
+
+                        count_stmt = (
+                            select(
+                                func.count(Message.id)
+                            )
+                            .where(
+                                Message.chat_id == chat_id,
+                                Message.role == MessageRole.USER,
+                            )
+                        )
+
+                    else:
+
+                        count_stmt = (
+                            select(
+                                func.count(Message.id)
+                            )
+                            .where(
+                                Message.chat_id == chat_id,
+                                Message.role == MessageRole.USER,
+                                or_(
+                                    Message.created_at
+                                    > cursor_message.created_at,
+                                    (
+                                        Message.created_at
+                                        == cursor_message.created_at
+                                    )
+                                    & (
+                                        Message.id
+                                        > cursor_message.id
+                                    ),
+                                ),
+                            )
+                        )
+
+            new_user_message_count = (
+                await db.execute(
+                    count_stmt
+                )
             ).scalar() or 0
 
-            is_quiz_ready = user_msg_count >= 5
+            is_quiz_ready = (
+                new_user_message_count >= 5
+            )
+
+            # ------------------------------------------------
+            # Build response before commit.
+            # ------------------------------------------------
 
             response_data = MessageResponse(
                 id=assistant_msg.id,
@@ -231,6 +419,10 @@ class ChatService:
             await db.rollback()
             raise
 
+    # ========================================================
+    # UPDATE CHAT TITLE
+    # ========================================================
+
     async def update_chat_title(
         self,
         db: AsyncSession,
@@ -246,27 +438,38 @@ class ChatService:
                     Chat.id == chat_id,
                     Chat.user_id == user_id,
                 )
-                .values(title=new_title)
+                .values(
+                    title=new_title
+                )
                 .returning(Chat)
             )
 
             result = await db.execute(stmt)
 
-            updated_chat = result.scalar_one_or_none()
+            updated_chat = (
+                result.scalar_one_or_none()
+            )
 
             if not updated_chat:
 
                 check_stmt = (
                     select(Chat)
-                    .where(Chat.id == chat_id)
+                    .where(
+                        Chat.id == chat_id
+                    )
                 )
 
-                check_result = await db.execute(check_stmt)
+                check_result = await db.execute(
+                    check_stmt
+                )
 
-                if check_result.scalar_one_or_none():
-
+                if (
+                    check_result.scalar_one_or_none()
+                ):
                     raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
+                        status_code=(
+                            status.HTTP_403_FORBIDDEN
+                        ),
                         detail=(
                             "You do not have permission to update "
                             "this chat session."
@@ -287,12 +490,20 @@ class ChatService:
             await db.rollback()
             raise
 
+    # ========================================================
+    # GET LATEST USER MESSAGES
+    # ========================================================
+
     async def get_latest_chat(
         self,
         db: AsyncSession,
         chat_id: UUID,
         user_id: UUID,
     ) -> list[MessageResponse] | None:
+
+        # ----------------------------------------------------
+        # Verify chat ownership.
+        # ----------------------------------------------------
 
         chat_stmt = (
             select(Chat)
@@ -302,9 +513,13 @@ class ChatService:
             )
         )
 
-        chat_result = await db.execute(chat_stmt)
+        chat_result = await db.execute(
+            chat_stmt
+        )
 
-        chat_record = chat_result.scalar_one_or_none()
+        chat_record = (
+            chat_result.scalar_one_or_none()
+        )
 
         if not chat_record:
             raise HTTPException(
@@ -315,31 +530,50 @@ class ChatService:
                 ),
             )
 
+        # ----------------------------------------------------
+        # UUIDs are NOT chronological.
+        #
+        # Use created_at + id as the ordering.
+        # ----------------------------------------------------
+
         stmt = (
             select(Message)
             .where(
                 Message.chat_id == chat_id,
-                Message.role == "user",
+                Message.role == MessageRole.USER,
             )
-            .order_by(Message.created_at.desc())
+            .order_by(
+                Message.created_at.desc(),
+                Message.id.desc(),
+            )
             .limit(5)
         )
 
         result = await db.execute(stmt)
 
-        messages = result.scalars().all()
+        messages = list(
+            result.scalars().all()
+        )
 
         if len(messages) < 5:
             return None
 
-        chronological_msgs = list(
-            reversed(messages)
-        )
+        # ----------------------------------------------------
+        # Return chronological order.
+        # ----------------------------------------------------
+
+        messages.reverse()
 
         return [
-            MessageResponse.model_validate(message)
-            for message in chronological_msgs
+            MessageResponse.model_validate(
+                message
+            )
+            for message in messages
         ]
+
+    # ========================================================
+    # DELETE CHAT
+    # ========================================================
 
     async def delete_chat(
         self,
@@ -351,12 +585,16 @@ class ChatService:
         try:
             stmt = (
                 select(Chat)
-                .where(Chat.id == chat_id)
+                .where(
+                    Chat.id == chat_id
+                )
             )
 
             result = await db.execute(stmt)
 
-            chat_record = result.scalar_one_or_none()
+            chat_record = (
+                result.scalar_one_or_none()
+            )
 
             if not chat_record:
                 return False
@@ -370,7 +608,9 @@ class ChatService:
                     ),
                 )
 
-            await db.delete(chat_record)
+            await db.delete(
+                chat_record
+            )
 
             await db.commit()
 
@@ -380,11 +620,15 @@ class ChatService:
             await db.rollback()
             raise
 
+    # ========================================================
+    # UPDATE MESSAGE
+    # ========================================================
+
     async def update_message_in_chat(
         self,
         db: AsyncSession,
         chat_id: UUID,
-        message_id: int,
+        message_id: UUID,
         user_id: UUID,
         new_user_text: str,
         new_assistant_text: str,
@@ -392,13 +636,21 @@ class ChatService:
         hierarchy: dict | None,
     ):
 
-        if not new_user_text or not new_user_text.strip():
+        if (
+            not new_user_text
+            or not new_user_text.strip()
+        ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    "User message content cannot be null or empty."
+                    "User message content cannot be null "
+                    "or empty."
                 ),
             )
+
+        # ----------------------------------------------------
+        # Verify chat ownership.
+        # ----------------------------------------------------
 
         chat_stmt = (
             select(Chat)
@@ -408,40 +660,65 @@ class ChatService:
             )
         )
 
-        chat_result = await db.execute(chat_stmt)
+        chat_result = await db.execute(
+            chat_stmt
+        )
 
-        chat_record = chat_result.scalar_one_or_none()
+        chat_record = (
+            chat_result.scalar_one_or_none()
+        )
 
         if not chat_record:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    "You do not have permission to update "
-                    "messages in this chat."
-                ),
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat session not found.",
             )
 
-        if chat_record.subject is None and subject:
+        # ----------------------------------------------------
+        # Preserve the permanent subject boundary.
+        # ----------------------------------------------------
+
+        if (
+            chat_record.subject is None
+            and subject
+        ):
             chat_record.subject = subject
 
+        # ----------------------------------------------------
+        # Get the latest USER message chronologically.
+        #
+        # UUID values cannot be used as timestamps.
+        # ----------------------------------------------------
+
         latest_user_stmt = (
-            select(func.max(Message.id))
+            select(Message)
             .where(
                 Message.chat_id == chat_id,
-                Message.role == "user",
+                Message.role == MessageRole.USER,
             )
+            .order_by(
+                Message.created_at.desc(),
+                Message.id.desc(),
+            )
+            .limit(1)
         )
 
         latest_result = await db.execute(
             latest_user_stmt
         )
 
-        latest_user_msg_id = latest_result.scalar()
+        latest_user_message = (
+            latest_result.scalars().first()
+        )
 
-        if not latest_user_msg_id:
+        if not latest_user_message:
             return None
 
-        if message_id != latest_user_msg_id:
+        # ----------------------------------------------------
+        # Only the latest user message can be updated.
+        # ----------------------------------------------------
+
+        if message_id != latest_user_message.id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
@@ -450,38 +727,84 @@ class ChatService:
                 ),
             )
 
+        # ----------------------------------------------------
+        # Get the actual user message.
+        # ----------------------------------------------------
+
         stmt = (
             select(Message)
             .where(
                 Message.id == message_id,
                 Message.chat_id == chat_id,
-                Message.role == "user",
+                Message.role == MessageRole.USER,
             )
         )
 
         result = await db.execute(stmt)
 
-        user_message = result.scalars().first()
+        user_message = (
+            result.scalars().first()
+        )
 
         if not user_message:
             return None
 
         hierarchy = hierarchy or {}
 
-        user_message.message = new_user_text.strip()
+        # ----------------------------------------------------
+        # Update user message.
+        # ----------------------------------------------------
 
-        user_message.chapter = hierarchy.get("chapter")
-        user_message.topic = hierarchy.get("topic")
-        user_message.subtopic = hierarchy.get("subtopic")
+        user_message.message = (
+            new_user_text.strip()
+        )
+
+        user_message.chapter = (
+            hierarchy.get("chapter")
+        )
+
+        user_message.topic = (
+            hierarchy.get("topic")
+        )
+
+        user_message.subtopic = (
+            hierarchy.get("subtopic")
+        )
+
+        # ----------------------------------------------------
+        # Find the first assistant message AFTER the edited
+        # user message chronologically.
+        #
+        # The previous implementation used:
+        #
+        # created_at >= user_message.created_at
+        #
+        # which could select an earlier assistant message
+        # when timestamps were equal.
+        # ----------------------------------------------------
 
         assistant_stmt = (
             select(Message)
             .where(
                 Message.chat_id == chat_id,
-                Message.role == "assistant",
-                Message.id > user_message.id,
+                Message.role == MessageRole.ASSISTANT,
+                or_(
+                    Message.created_at
+                    > user_message.created_at,
+                    (
+                        Message.created_at
+                        == user_message.created_at
+                    )
+                    & (
+                        Message.id
+                        > user_message.id
+                    ),
+                ),
             )
-            .order_by(Message.id.asc())
+            .order_by(
+                Message.created_at.asc(),
+                Message.id.asc(),
+            )
             .limit(1)
         )
 
@@ -493,30 +816,52 @@ class ChatService:
             assistant_result.scalars().first()
         )
 
+        # ----------------------------------------------------
+        # Update existing assistant response.
+        # ----------------------------------------------------
+
         if assistant_message:
 
-            assistant_message.message = new_assistant_text
+            assistant_message.message = (
+                new_assistant_text
+            )
 
-            assistant_message.chapter = hierarchy.get("chapter")
-            assistant_message.topic = hierarchy.get("topic")
-            assistant_message.subtopic = hierarchy.get("subtopic")
+            assistant_message.chapter = (
+                hierarchy.get("chapter")
+            )
+
+            assistant_message.topic = (
+                hierarchy.get("topic")
+            )
+
+            assistant_message.subtopic = (
+                hierarchy.get("subtopic")
+            )
+
+        # ----------------------------------------------------
+        # If no assistant response exists, create one.
+        # ----------------------------------------------------
 
         else:
 
             assistant_message = Message(
                 chat_id=chat_id,
-                role="assistant",
+                role=MessageRole.ASSISTANT,
                 message=new_assistant_text,
                 chapter=hierarchy.get("chapter"),
                 topic=hierarchy.get("topic"),
                 subtopic=hierarchy.get("subtopic"),
             )
 
-            db.add(assistant_message)
+            db.add(
+                assistant_message
+            )
 
         await db.commit()
 
-        await db.refresh(assistant_message)
+        await db.refresh(
+            assistant_message
+        )
 
         return MessageResponse.model_validate(
             assistant_message

@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import (
     BaseModel,
@@ -9,7 +10,7 @@ from pydantic import (
 
 
 class QuestionResponse(BaseModel):
-    id: int
+    id: UUID
     question_number: int
     question: str
     created_at: datetime
@@ -20,7 +21,7 @@ class QuestionResponse(BaseModel):
 
 
 class QuizQuestionResponse(BaseModel):
-    id: int
+    id: UUID
     question_number: int
     question: str
 
@@ -54,5 +55,5 @@ class QuizAnswerResponse(BaseModel):
     question_completed: bool
     quiz_completed: bool
 
-    # Only returned after 3 incorrect attempts.
+    # Returned only after the third incorrect attempt.
     model_answer: str | None = None

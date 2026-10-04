@@ -1,6 +1,11 @@
 from datetime import datetime
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+)
 
 from src.question.schema.question_schema import (
     QuizQuestionResponse,
@@ -8,8 +13,10 @@ from src.question.schema.question_schema import (
 
 
 class QuizResponse(BaseModel):
-    id: int
-    chat_id: int
+    id: UUID
+    chat_id: UUID
+    last_message_id: UUID | None = None
+    completed_at: datetime | None = None
     created_at: datetime
 
     model_config = ConfigDict(
@@ -18,8 +25,10 @@ class QuizResponse(BaseModel):
 
 
 class QuizDetailResponse(BaseModel):
-    id: int
-    chat_id: int
+    id: UUID
+    chat_id: UUID
+    last_message_id: UUID | None = None
+    completed_at: datetime | None = None
     created_at: datetime
 
     questions: list[QuizQuestionResponse] = Field(
