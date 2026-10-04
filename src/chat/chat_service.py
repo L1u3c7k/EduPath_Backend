@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -5,17 +7,20 @@ from fastapi import HTTPException, status
 
 from src.chat.model.chat_model import Chat
 from src.chat.model.message_model import Message
-from src.chat.schema.chat_schema import ChatResponse, ChatBase, ChatCreate
+from src.chat.schema.chat_schema import (
+    ChatResponse,
+    ChatBase,
+    ChatCreate,
+)
 from src.chat.schema.message_schema import MessageResponse
 
-quiz_service = QuizService()
 
 class ChatService:
 
     async def create_chat_session(
         self,
         db: AsyncSession,
-        user_id: int,
+        user_id: UUID,
         user_text: str,
         assistant_text: str,
         subject: str | None,
@@ -70,9 +75,12 @@ class ChatService:
             )
 
             result = await db.execute(statement)
+
             chat_record = result.scalar_one()
 
-            response_data = ChatResponse.model_validate(chat_record)
+            response_data = ChatResponse.model_validate(
+                chat_record
+            )
 
             await db.commit()
 
@@ -85,7 +93,7 @@ class ChatService:
     async def get_chat_sessions(
         self,
         db: AsyncSession,
-        user_id: int,
+        user_id: UUID,
     ):
         query = (
             select(Chat)
@@ -100,8 +108,8 @@ class ChatService:
     async def get_chat_with_history(
         self,
         db: AsyncSession,
-        chat_id: int,
-        user_id: int,
+        chat_id: UUID,
+        user_id: UUID,
     ) -> ChatResponse | None:
 
         statement = (
@@ -120,7 +128,10 @@ class ChatService:
         if chat_record.user_id != user_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to access this chat session.",
+                detail=(
+                    "You do not have permission to access "
+                    "this chat session."
+                ),
             )
 
         return ChatResponse.model_validate(chat_record)
@@ -128,8 +139,8 @@ class ChatService:
     async def add_messages_to_existing_chat(
         self,
         db: AsyncSession,
-        chat_id: int,
-        user_id: int,
+        chat_id: UUID,
+        user_id: UUID,
         user_text: str,
         assistant_text: str,
         subject: str | None,
@@ -153,7 +164,10 @@ class ChatService:
             if chat_record.user_id != user_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You do not have permission to modify this chat session.",
+                    detail=(
+                        "You do not have permission to modify "
+                        "this chat session."
+                    ),
                 )
 
             if chat_record.subject is None and subject:
@@ -186,23 +200,19 @@ class ChatService:
 
             await db.flush()
 
-            response_data = MessageResponse.model_validate(
-                assistant_msg
-            )
-
-
-            # Check if user messages count in this chat reaches or exceeds 5
             count_stmt = (
                 select(func.count(Message.id))
-                .where(Message.chat_id == chat_id, Message.role == "user")
+                .where(
+                    Message.chat_id == chat_id,
+                    Message.role == "user",
+                )
             )
-            user_msg_count = (await db.execute(count_stmt)).scalar() or 0
 
-            # Trigger Redis quiz generation on 5th message (if no active session exists)
-            is_quiz_ready = False
-            if user_msg_count >= 5:
-                
-                is_quiz_ready = True
+            user_msg_count = (
+                await db.execute(count_stmt)
+            ).scalar() or 0
+
+            is_quiz_ready = user_msg_count >= 5
 
             response_data = MessageResponse(
                 id=assistant_msg.id,
@@ -210,8 +220,9 @@ class ChatService:
                 role=assistant_msg.role,
                 message=assistant_msg.message,
                 created_at=assistant_msg.created_at,
-                quiz_ready=is_quiz_ready
+                quiz_ready=is_quiz_ready,
             )
+
             await db.commit()
 
             return response_data
@@ -223,8 +234,8 @@ class ChatService:
     async def update_chat_title(
         self,
         db: AsyncSession,
-        chat_id: int,
-        user_id: int,
+        chat_id: UUID,
+        user_id: UUID,
         new_title: str,
     ) -> ChatBase | None:
 
@@ -256,7 +267,10 @@ class ChatService:
 
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
-                        detail="You do not have permission to update this chat session.",
+                        detail=(
+                            "You do not have permission to update "
+                            "this chat session."
+                        ),
                     )
 
                 return None
@@ -276,8 +290,8 @@ class ChatService:
     async def get_latest_chat(
         self,
         db: AsyncSession,
-        chat_id: int,
-        user_id: int,
+        chat_id: UUID,
+        user_id: UUID,
     ) -> list[MessageResponse] | None:
 
         chat_stmt = (
@@ -295,7 +309,10 @@ class ChatService:
         if not chat_record:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to access this chat session.",
+                detail=(
+                    "You do not have permission to access "
+                    "this chat session."
+                ),
             )
 
         stmt = (
@@ -327,8 +344,8 @@ class ChatService:
     async def delete_chat(
         self,
         db: AsyncSession,
-        chat_id: int,
-        user_id: int,
+        chat_id: UUID,
+        user_id: UUID,
     ) -> bool:
 
         try:
@@ -347,7 +364,10 @@ class ChatService:
             if chat_record.user_id != user_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You do not have permission to delete this chat session.",
+                    detail=(
+                        "You do not have permission to delete "
+                        "this chat session."
+                    ),
                 )
 
             await db.delete(chat_record)
@@ -363,9 +383,9 @@ class ChatService:
     async def update_message_in_chat(
         self,
         db: AsyncSession,
-        chat_id: int,
+        chat_id: UUID,
         message_id: int,
-        user_id: int,
+        user_id: UUID,
         new_user_text: str,
         new_assistant_text: str,
         subject: str | None,
@@ -375,7 +395,9 @@ class ChatService:
         if not new_user_text or not new_user_text.strip():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User message content cannot be null or empty.",
+                detail=(
+                    "User message content cannot be null or empty."
+                ),
             )
 
         chat_stmt = (
@@ -393,10 +415,12 @@ class ChatService:
         if not chat_record:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to update messages in this chat.",
+                detail=(
+                    "You do not have permission to update "
+                    "messages in this chat."
+                ),
             )
 
-        
         if chat_record.subject is None and subject:
             chat_record.subject = subject
 
@@ -420,7 +444,10 @@ class ChatService:
         if message_id != latest_user_msg_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only the latest message in the chat can be updated.",
+                detail=(
+                    "Only the latest message in the chat "
+                    "can be updated."
+                ),
             )
 
         stmt = (
@@ -462,7 +489,9 @@ class ChatService:
             assistant_stmt
         )
 
-        assistant_message = assistant_result.scalars().first()
+        assistant_message = (
+            assistant_result.scalars().first()
+        )
 
         if assistant_message:
 

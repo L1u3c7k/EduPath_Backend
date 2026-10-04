@@ -1,5 +1,9 @@
+import json
 from datetime import datetime, timezone
+from uuid import UUID
 
+import redis.asyncio as redis
+from fastapi import HTTPException, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +21,58 @@ from src.quiz.evaluator import evaluate_answer
 
 BATCH_SIZE = 5
 MAX_ATTEMPTS = 3
+REDIS_TTL = 1800
+
+
+# ============================================================
+# REDIS
+# ============================================================
+
+def get_quiz_redis_key(chat_id: UUID) -> str:
+    return f"quiz:{str(chat_id)}"
+
+
+async def get_redis_quiz(
+    redis_client: redis.Redis,
+    chat_id: UUID,
+) -> dict | None:
+
+    key = get_quiz_redis_key(chat_id)
+
+    raw = await redis_client.get(key)
+
+    if not raw:
+        return None
+
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+
+    return json.loads(raw)
+
+
+async def save_redis_quiz(
+    redis_client: redis.Redis,
+    chat_id: UUID,
+    quiz_data: dict,
+) -> None:
+
+    key = get_quiz_redis_key(chat_id)
+
+    await redis_client.set(
+        key,
+        json.dumps(quiz_data),
+        ex=REDIS_TTL,
+    )
+
+
+async def delete_redis_quiz(
+    redis_client: redis.Redis,
+    chat_id: UUID,
+) -> None:
+
+    await redis_client.delete(
+        get_quiz_redis_key(chat_id)
+    )
 
 
 # ============================================================
@@ -42,12 +98,12 @@ def format_chat_history(messages) -> str:
 
 
 # ============================================================
-# GET QUIZ
+# GET POSTGRES QUIZ
 # ============================================================
 
 async def get_quiz(
     db: AsyncSession,
-    chat_id: int,
+    chat_id: UUID,
 ) -> Quiz | None:
 
     result = await db.execute(
@@ -66,7 +122,7 @@ async def get_quiz(
 
 async def get_existing_questions(
     db: AsyncSession,
-    quiz_id: int,
+    quiz_id: UUID,
 ) -> list[Question]:
 
     result = await db.execute(
@@ -90,36 +146,42 @@ async def get_existing_questions(
 
 async def generate_quiz_batch(
     db: AsyncSession,
+    redis_client: redis.Redis,
     chat: Chat,
-) -> tuple[
-    Quiz | None,
-    Question | None,
-    str | None,
-]:
+) -> tuple[dict | None, str | None]:
 
     # --------------------------------------------------------
-    # Get existing quiz
+    # Check active Redis quiz
     # --------------------------------------------------------
 
-    quiz = await get_quiz(
+    active_quiz = await get_redis_quiz(
+        redis_client=redis_client,
+        chat_id=chat.id,
+    )
+
+    if active_quiz is not None:
+
+        return (
+            active_quiz,
+            "An active quiz already exists."
+        )
+
+    # --------------------------------------------------------
+    # Get completed PostgreSQL quiz
+    # --------------------------------------------------------
+
+    postgres_quiz = await get_quiz(
         db=db,
         chat_id=chat.id,
     )
 
-    # --------------------------------------------------------
-    # Determine the last processed message
-    # --------------------------------------------------------
-
     last_message_id = None
 
-    if quiz is not None:
-        last_message_id = quiz.last_message_id
+    if postgres_quiz is not None:
+        last_message_id = postgres_quiz.last_message_id
 
     # --------------------------------------------------------
-    # Get the next batch of unprocessed messages
-    #
-    # history.py returns the FIRST 5 messages after
-    # last_message_id, so older messages are never skipped.
+    # Get next unprocessed messages
     # --------------------------------------------------------
 
     messages = await get_quiz_messages(
@@ -128,31 +190,26 @@ async def generate_quiz_batch(
         last_message_id=last_message_id,
     )
 
-    # --------------------------------------------------------
-    # Need at least 5 new messages
-    # --------------------------------------------------------
-
     if len(messages) < BATCH_SIZE:
 
         return (
-            quiz,
             None,
             "Not enough new chat messages "
-            "to generate another quiz batch.",
+            "to generate another quiz batch."
         )
 
     # --------------------------------------------------------
-    # Get existing questions
+    # Existing completed questions
     # --------------------------------------------------------
 
     existing_questions = []
 
-    if quiz is not None:
+    if postgres_quiz is not None:
 
         existing_questions = (
             await get_existing_questions(
                 db=db,
-                quiz_id=quiz.id,
+                quiz_id=postgres_quiz.id,
             )
         )
 
@@ -162,7 +219,7 @@ async def generate_quiz_batch(
     ]
 
     # --------------------------------------------------------
-    # Format new message batch
+    # Format history
     # --------------------------------------------------------
 
     chat_history = format_chat_history(
@@ -170,310 +227,167 @@ async def generate_quiz_batch(
     )
 
     # --------------------------------------------------------
-    # Generate up to 5 new questions
+    # Generate questions
     # --------------------------------------------------------
 
-    generated_questions = (
-        generate_quiz_questions(
-            chat_history=chat_history,
-            existing_questions=(
-                existing_question_texts
-            ),
-        )
+    generated_questions = generate_quiz_questions(
+        chat_history=chat_history,
+        existing_questions=existing_question_texts,
     )
 
     # --------------------------------------------------------
-    # GENERATION FAILURE
-    #
-    # None means the LLM/API failed.
-    #
-    # IMPORTANT:
-    # Do NOT advance last_message_id.
-    #
-    # This allows the same messages to be retried later.
+    # LLM FAILURE
     # --------------------------------------------------------
 
     if generated_questions is None:
 
         return (
-            quiz,
             None,
-            "Quiz generation failed. "
-            "Please try again.",
+            "Quiz generation failed. Please try again."
         )
 
     # --------------------------------------------------------
     # NO NEW QUESTIONS
-    #
-    # [] means generation succeeded, but the LLM found
-    # no genuinely new questions.
-    #
-    # These messages have been successfully processed,
-    # so we can advance the cursor.
     # --------------------------------------------------------
 
     if not generated_questions:
 
-        if quiz is not None:
+        if postgres_quiz is not None:
 
-            quiz.last_message_id = messages[-1].id
+            postgres_quiz.last_message_id = messages[-1].id
 
-            await db.flush()
+            await db.commit()
 
         return (
-            quiz,
             None,
             "No new quiz questions could be generated "
-            "from the new material.",
+            "from the new material."
         )
 
     # --------------------------------------------------------
-    # Create quiz if this is the first batch
+    # Determine starting question number
     # --------------------------------------------------------
 
-    if quiz is None:
+    starting_number = 1
 
-        quiz = Quiz(
-            chat_id=chat.id,
-            last_message_id=messages[-1].id,
-        )
-
-        db.add(quiz)
-
-        await db.flush()
-
-        starting_number = 1
-
-    # --------------------------------------------------------
-    # Existing quiz
-    #
-    # Continue question numbering.
-    # --------------------------------------------------------
-
-    else:
-
-        result = await db.execute(
-            select(
-                func.max(
-                    Question.question_number
-                )
-            )
-            .where(
-                Question.quiz_id == quiz.id
-            )
-        )
-
-        last_question_number = (
-            result.scalar_one()
-        )
+    if existing_questions:
 
         starting_number = (
-            (last_question_number or 0)
+            max(
+                question.question_number
+                for question in existing_questions
+            )
             + 1
         )
 
-        # ----------------------------------------------------
-        # A new batch makes the quiz incomplete again.
-        #
-        # This matters if the previous batch had already
-        # completed the quiz.
-        # ----------------------------------------------------
-
-        quiz.completed_at = None
-
     # --------------------------------------------------------
-    # Save generated questions
+    # Create temporary Redis quiz
     # --------------------------------------------------------
 
-    questions = []
+    quiz_data = {
+        "chat_id": str(chat.id),
+        "last_message_id": messages[-1].id,
+        "questions": [],
+    }
 
-    for index, item in enumerate(
-        generated_questions
-    ):
+    for index, item in enumerate(generated_questions):
 
-        question = Question(
-            quiz_id=quiz.id,
-            question_number=(
-                starting_number + index
-            ),
-            question=item["question"],
-            model_answer=item["model_answer"],
+        quiz_data["questions"].append(
+            {
+                "question_number": (
+                    starting_number + index
+                ),
+                "question": item["question"],
+                "model_answer": item["model_answer"],
+                "attempts": [],
+                "completed": False,
+            }
         )
 
-        db.add(question)
-
-        questions.append(question)
-
     # --------------------------------------------------------
-    # Advance cursor only after successful generation
+    # Save ONLY to Redis
     # --------------------------------------------------------
 
-    quiz.last_message_id = messages[-1].id
-
-    await db.flush()
-
-    # --------------------------------------------------------
-    # Return first newly generated question.
-    #
-    # This is NOT a current_question.
-    # Questions can still be answered in any order.
-    # --------------------------------------------------------
+    await save_redis_quiz(
+        redis_client=redis_client,
+        chat_id=chat.id,
+        quiz_data=quiz_data,
+    )
 
     return (
-        quiz,
-        questions[0],
+        quiz_data,
         None,
     )
 
 
 # ============================================================
-# GET ATTEMPT COUNT
+# GET REDIS QUESTION
 # ============================================================
 
-async def get_attempt_count(
-    db: AsyncSession,
-    question_id: int,
-) -> int:
+def get_redis_question(
+    quiz_data: dict,
+    question_number: int,
+) -> dict:
 
-    result = await db.execute(
-        select(
-            func.count(
-                QuizAttempt.id
-            )
-        )
-        .where(
-            QuizAttempt.question_id
-            == question_id
-        )
+    for question in quiz_data.get("questions", []):
+
+        if question["question_number"] == question_number:
+            return question
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Question not found.",
     )
 
-    return int(
-        result.scalar() or 0
+
+# ============================================================
+# CHECK QUESTION COMPLETION
+# ============================================================
+
+def is_question_completed(
+    question: dict,
+) -> bool:
+
+    if question.get("completed", False):
+        return True
+
+    attempts = question.get(
+        "attempts",
+        []
     )
+
+    if any(
+        attempt["is_correct"]
+        for attempt in attempts
+    ):
+        return True
+
+    if len(attempts) >= MAX_ATTEMPTS:
+        return True
+
+    return False
 
 
 # ============================================================
 # CHECK QUIZ COMPLETION
 # ============================================================
 
-async def is_quiz_completed(
-    db: AsyncSession,
-    quiz_id: int,
+def is_redis_quiz_completed(
+    quiz_data: dict,
 ) -> bool:
 
-    # --------------------------------------------------------
-    # Get all question IDs
-    # --------------------------------------------------------
-
-    result = await db.execute(
-        select(Question.id)
-        .where(
-            Question.quiz_id == quiz_id
-        )
+    questions = quiz_data.get(
+        "questions",
+        []
     )
 
-    question_ids = result.scalars().all()
-
-    # A quiz with no questions is not completed.
-    if not question_ids:
+    if not questions:
         return False
 
-    # --------------------------------------------------------
-    # Find correctly answered questions
-    # --------------------------------------------------------
-
-    result = await db.execute(
-        select(
-            QuizAttempt.question_id
-        )
-        .where(
-            QuizAttempt.question_id.in_(question_ids),
-            QuizAttempt.is_correct.is_(True),
-        )
-        .distinct()
+    return all(
+        is_question_completed(question)
+        for question in questions
     )
-
-    correctly_answered = set(
-        result.scalars().all()
-    )
-
-    # --------------------------------------------------------
-    # Get attempt counts
-    # --------------------------------------------------------
-
-    result = await db.execute(
-        select(
-            QuizAttempt.question_id,
-            func.count(
-                QuizAttempt.id
-            ).label("attempt_count"),
-        )
-        .where(
-            QuizAttempt.question_id.in_(question_ids)
-        )
-        .group_by(
-            QuizAttempt.question_id
-        )
-    )
-
-    attempt_counts = {
-        question_id: attempt_count
-        for question_id, attempt_count
-        in result.all()
-    }
-
-    # --------------------------------------------------------
-    # Every question must be completed.
-    #
-    # A question is completed if:
-    #
-    # 1. It was answered correctly at least once
-    # OR
-    # 2. It reached 3 attempts
-    # --------------------------------------------------------
-
-    for question_id in question_ids:
-
-        if question_id in correctly_answered:
-            continue
-
-        if attempt_counts.get(
-            question_id,
-            0
-        ) >= MAX_ATTEMPTS:
-            continue
-
-        return False
-
-    return True
-
-
-# ============================================================
-# SAVE ATTEMPT
-# ============================================================
-
-async def save_attempt(
-    db: AsyncSession,
-    question: Question,
-    attempt_number: int,
-    user_answer: str,
-    is_correct: bool,
-    feedback: str,
-) -> QuizAttempt:
-
-    attempt = QuizAttempt(
-        question_id=question.id,
-        attempt_number=attempt_number,
-        user_answer=user_answer,
-        is_correct=is_correct,
-        feedback=feedback,
-    )
-
-    db.add(attempt)
-
-    await db.flush()
-
-    return attempt
 
 
 # ============================================================
@@ -482,46 +396,78 @@ async def save_attempt(
 
 async def answer_question(
     db: AsyncSession,
-    quiz: Quiz,
-    question: Question,
+    redis_client: redis.Redis,
+    chat_id: UUID,
+    question_number: int,
     user_answer: str,
 ) -> dict:
 
     # --------------------------------------------------------
-    # Count previous attempts
+    # Load Redis quiz
     # --------------------------------------------------------
 
-    attempts = await get_attempt_count(
-        db=db,
-        question_id=question.id,
+    quiz_data = await get_redis_quiz(
+        redis_client=redis_client,
+        chat_id=chat_id,
+    )
+
+    if quiz_data is None:
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active quiz found.",
+        )
+
+    # --------------------------------------------------------
+    # Find question
+    # --------------------------------------------------------
+
+    question = get_redis_question(
+        quiz_data=quiz_data,
+        question_number=question_number,
     )
 
     # --------------------------------------------------------
-    # Maximum 3 attempts
+    # Check completion
     # --------------------------------------------------------
 
-    if attempts >= MAX_ATTEMPTS:
+    if is_question_completed(question):
 
-        return {
-            "error": "Maximum attempts reached."
-        }
-
-    attempt_number = attempts + 1
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This question is already completed.",
+        )
 
     # --------------------------------------------------------
-    # Evaluate answer using LLM
+    # Attempts
+    # --------------------------------------------------------
+
+    attempts = question.get(
+        "attempts",
+        []
+    )
+
+    if len(attempts) >= MAX_ATTEMPTS:
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Maximum attempts reached.",
+        )
+
+    attempt_number = len(attempts) + 1
+
+    # --------------------------------------------------------
+    # Evaluate answer
     # --------------------------------------------------------
 
     evaluation = evaluate_answer(
-        question=question.question,
-        model_answer=question.model_answer,
+        question=question["question"],
+        model_answer=question["model_answer"],
         user_answer=user_answer,
     )
 
     # --------------------------------------------------------
-    # LLM/API evaluation failure
-    #
-    # Do NOT save an attempt.
+    # Evaluation failure
     # --------------------------------------------------------
 
     if evaluation is None:
@@ -535,54 +481,93 @@ async def answer_question(
     hint = evaluation["hint"]
 
     # --------------------------------------------------------
-    # Save student's attempt
+    # Save attempt
     # --------------------------------------------------------
 
-    await save_attempt(
-        db=db,
-        question=question,
-        attempt_number=attempt_number,
-        user_answer=user_answer,
-        is_correct=is_correct,
-        feedback=feedback,
+    attempt = {
+        "attempt_number": attempt_number,
+        "user_answer": user_answer,
+        "is_correct": is_correct,
+        "feedback": feedback,
+    }
+
+    question.setdefault("attempts", []).append(
+        attempt
     )
 
     # --------------------------------------------------------
-    # CORRECT ANSWER
-    #
-    # Question is completed immediately.
+    # Correct
     # --------------------------------------------------------
 
     if is_correct:
 
-        quiz_completed = await is_quiz_completed(
+        question["completed"] = True
+
+    # --------------------------------------------------------
+    # Third wrong attempt
+    # --------------------------------------------------------
+
+    elif attempt_number == MAX_ATTEMPTS:
+
+        question["completed"] = True
+
+    # --------------------------------------------------------
+    # Check entire quiz
+    # --------------------------------------------------------
+
+    quiz_completed = is_redis_quiz_completed(
+        quiz_data
+    )
+
+    # --------------------------------------------------------
+    # Save completed quiz
+    # --------------------------------------------------------
+
+    if quiz_completed:
+
+        quiz_record = await save_completed_quiz_to_db(
             db=db,
-            quiz_id=quiz.id,
+            chat_id=chat_id,
+            quiz_data=quiz_data,
         )
 
-        if quiz_completed:
+        # Redis is deleted ONLY after DB commit succeeds.
 
-            quiz.completed_at = datetime.now(
-                timezone.utc
-            )
-
-        await db.flush()
+        await delete_redis_quiz(
+            redis_client=redis_client,
+            chat_id=chat_id,
+        )
 
         return {
-            "correct": True,
+            "correct": is_correct,
             "explanation": feedback,
             "hint": None,
             "question_completed": True,
-            "quiz_completed": quiz_completed,
-            "next_question": None,
-            "model_answer": None,
+            "quiz_completed": True,
+            "question_number": question_number,
+            "model_answer": (
+                None
+                if is_correct
+                else question["model_answer"]
+            ),
+            "quiz_id": str(quiz_record.id),
         }
 
     # --------------------------------------------------------
-    # WRONG ANSWER — ATTEMPTS REMAIN
+    # Quiz still active
     # --------------------------------------------------------
 
-    if attempt_number < MAX_ATTEMPTS:
+    await save_redis_quiz(
+        redis_client=redis_client,
+        chat_id=chat_id,
+        quiz_data=quiz_data,
+    )
+
+    # --------------------------------------------------------
+    # Wrong answer
+    # --------------------------------------------------------
+
+    if not is_correct:
 
         return {
             "correct": False,
@@ -590,36 +575,163 @@ async def answer_question(
             "hint": hint,
             "question_completed": False,
             "quiz_completed": False,
-            "next_question": None,
-            "model_answer": None,
+            "question_number": question_number,
+            "model_answer": (
+                question["model_answer"]
+                if attempt_number == MAX_ATTEMPTS
+                else None
+            ),
         }
 
     # --------------------------------------------------------
-    # WRONG ANSWER — THIRD ATTEMPT
-    #
-    # Question becomes completed.
-    # Model answer is revealed.
+    # Correct answer
     # --------------------------------------------------------
 
-    quiz_completed = await is_quiz_completed(
-        db=db,
-        quiz_id=quiz.id,
-    )
-
-    if quiz_completed:
-
-        quiz.completed_at = datetime.now(
-            timezone.utc
-        )
-
-    await db.flush()
-
     return {
-        "correct": False,
+        "correct": True,
         "explanation": feedback,
         "hint": None,
         "question_completed": True,
-        "quiz_completed": quiz_completed,
-        "next_question": None,
-        "model_answer": question.model_answer,
+        "quiz_completed": False,
+        "question_number": question_number,
+        "model_answer": None,
     }
+
+
+# ============================================================
+# SAVE COMPLETED QUIZ TO POSTGRESQL
+# ============================================================
+
+async def save_completed_quiz_to_db(
+    db: AsyncSession,
+    chat_id: UUID,
+    quiz_data: dict,
+) -> Quiz:
+
+    questions = quiz_data.get(
+        "questions",
+        []
+    )
+
+    if not questions:
+
+        raise ValueError(
+            "Cannot save an empty quiz."
+        )
+
+    if not is_redis_quiz_completed(
+        quiz_data
+    ):
+
+        raise ValueError(
+            "Cannot save an incomplete quiz."
+        )
+
+    try:
+
+        # ----------------------------------------------------
+        # Get existing Quiz
+        # ----------------------------------------------------
+
+        result = await db.execute(
+            select(Quiz)
+            .where(
+                Quiz.chat_id == chat_id
+            )
+        )
+
+        quiz_record = result.scalar_one_or_none()
+
+        # ----------------------------------------------------
+        # Create Quiz if necessary
+        # ----------------------------------------------------
+
+        if quiz_record is None:
+
+            quiz_record = Quiz(
+                chat_id=chat_id,
+                last_message_id=(
+                    quiz_data["last_message_id"]
+                ),
+                completed_at=datetime.now(
+                    timezone.utc
+                ),
+            )
+
+            db.add(quiz_record)
+
+            await db.flush()
+
+        else:
+
+            quiz_record.last_message_id = (
+                quiz_data["last_message_id"]
+            )
+
+            quiz_record.completed_at = (
+                datetime.now(timezone.utc)
+            )
+
+        # ----------------------------------------------------
+        # Save every question
+        # ----------------------------------------------------
+
+        for redis_question in questions:
+
+            question_record = Question(
+                quiz_id=quiz_record.id,
+                question_number=(
+                    redis_question["question_number"]
+                ),
+                question=redis_question["question"],
+                model_answer=redis_question["model_answer"],
+            )
+
+            db.add(question_record)
+
+            await db.flush()
+
+            # ------------------------------------------------
+            # Save EVERY attempt
+            # ------------------------------------------------
+
+            for attempt in redis_question.get(
+                "attempts",
+                []
+            ):
+
+                attempt_record = QuizAttempt(
+                    question_id=question_record.id,
+                    attempt_number=(
+                        attempt["attempt_number"]
+                    ),
+                    user_answer=(
+                        attempt["user_answer"]
+                    ),
+                    is_correct=(
+                        attempt["is_correct"]
+                    ),
+                    feedback=(
+                        attempt["feedback"]
+                    ),
+                )
+
+                db.add(attempt_record)
+
+        # ----------------------------------------------------
+        # One PostgreSQL transaction
+        # ----------------------------------------------------
+
+        await db.commit()
+
+        await db.refresh(
+            quiz_record
+        )
+
+        return quiz_record
+
+    except Exception:
+
+        await db.rollback()
+
+        raise

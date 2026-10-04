@@ -5,6 +5,7 @@ from sqlalchemy import (
     func,
     Integer,
     Column,
+    UUID,
 )
 from sqlalchemy.orm import relationship
 
@@ -20,7 +21,7 @@ class Question(Base):
     )
 
     quiz_id = Column(
-        Integer,
+        UUID(as_uuid=True),
         ForeignKey("quizzes.id", ondelete="CASCADE"),
         nullable=False
     )
