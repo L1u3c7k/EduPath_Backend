@@ -46,11 +46,62 @@ def filter_by_subject(
     return filtered[:TOP_K]
 
 
+def build_source_documents(
+    docs: list[dict],
+) -> list[dict]:
+
+    sources = []
+
+    seen = set()
+
+    for doc in docs:
+
+        metadata = doc.get(
+            "metadata",
+            {}
+        )
+
+        source = {
+            "book_title": metadata.get("book_title"),
+            "chapter": metadata.get("chapter"),
+            "topic": metadata.get("topic"),
+            "subtopic": metadata.get("subtopic"),
+            "page": metadata.get("page"),
+        }
+
+        # Remove completely empty source records.
+        if not any(source.values()):
+            continue
+
+        # Avoid saving duplicate source records.
+        source_key = (
+            source["book_title"],
+            source["chapter"],
+            source["topic"],
+            source["subtopic"],
+            source["page"],
+        )
+
+        if source_key in seen:
+            continue
+
+        seen.add(source_key)
+
+        sources.append(source)
+
+    return sources
+
+
 async def ai_chat(
     question: str,
     db: AsyncSession,
     current_subject: str | None = None,
-) -> tuple[str, str | None, dict | None]:
+) -> tuple[
+    str,
+    str | None,
+    dict | None,
+    list[dict],
+]:
 
     # --------------------------------------------------
     # 1. Embed question
@@ -82,6 +133,7 @@ async def ai_chat(
                 "in the study materials.",
                 None,
                 None,
+                [],
             )
 
         return (
@@ -90,6 +142,7 @@ async def ai_chat(
             "Please start a new chat.",
             current_subject,
             None,
+            [],
         )
 
     # --------------------------------------------------
@@ -109,6 +162,7 @@ async def ai_chat(
                 "from the available study materials.",
                 None,
                 None,
+                [],
             )
 
         subject = detected["subject"]
@@ -128,6 +182,7 @@ async def ai_chat(
                 "Please start a new chat.",
                 subject,
                 None,
+                [],
             )
 
     # --------------------------------------------------
@@ -146,10 +201,19 @@ async def ai_chat(
             "Please start a new chat.",
             subject,
             None,
+            [],
         )
 
     # --------------------------------------------------
-    # 6. Get hierarchy for this turn
+    # 6. Build source information
+    # --------------------------------------------------
+
+    sources = build_source_documents(
+        docs
+    )
+
+    # --------------------------------------------------
+    # 7. Get hierarchy for this turn
     # --------------------------------------------------
 
     metadata = docs[0].get(
@@ -164,7 +228,7 @@ async def ai_chat(
     }
 
     # --------------------------------------------------
-    # 7. Build RAG context
+    # 8. Build RAG context
     # --------------------------------------------------
 
     context = build_context(
@@ -172,7 +236,7 @@ async def ai_chat(
     )
 
     # --------------------------------------------------
-    # 8. Generate answer
+    # 9. Generate answer
     # --------------------------------------------------
 
     answer = generate_answer(
@@ -181,11 +245,12 @@ async def ai_chat(
     )
 
     # --------------------------------------------------
-    # 9. Return everything needed by the chat service
+    # 10. Return everything needed by the chat service
     # --------------------------------------------------
 
     return (
         answer,
         subject,
         hierarchy,
+        sources,
     )

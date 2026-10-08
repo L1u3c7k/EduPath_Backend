@@ -80,13 +80,14 @@ async def initialize_chat(
     # --------------------------------------------------------
     # A new chat has no subject yet.
     #
-    # AI determines the subject and hierarchy from RAG.
+    # AI determines the subject, hierarchy, and RAG sources.
     # --------------------------------------------------------
 
     (
         ai_response_text,
         subject,
         hierarchy,
+        source_documents,
     ) = await ai_chat(
         question=payload.message,
         db=db,
@@ -100,6 +101,7 @@ async def initialize_chat(
         assistant_text=ai_response_text,
         subject=subject,
         hierarchy=hierarchy,
+        source_documents=source_documents,
     )
 
 
@@ -153,6 +155,7 @@ async def continue_chat(
         ai_response_text,
         subject,
         hierarchy,
+        source_documents,
     ) = await ai_chat(
         question=payload.message,
         db=db,
@@ -168,6 +171,7 @@ async def continue_chat(
             assistant_text=ai_response_text,
             subject=subject,
             hierarchy=hierarchy,
+            source_documents=source_documents,
         )
     )
 
@@ -386,6 +390,7 @@ async def update_message(
         ai_response_text,
         subject,
         hierarchy,
+        source_documents,
     ) = await ai_chat(
         question=payload.message,
         db=db,
@@ -402,6 +407,7 @@ async def update_message(
             new_assistant_text=ai_response_text,
             subject=subject,
             hierarchy=hierarchy,
+            source_documents=source_documents,
         )
     )
 

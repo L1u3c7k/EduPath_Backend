@@ -5,6 +5,7 @@ import uuid
 
 from sqlalchemy import (
     UUID,
+    JSON,
     Column,
     DateTime,
     Enum as SQLEnum,
@@ -64,6 +65,11 @@ class Message(Base):
 
     subtopic = Column(
         String(255),
+        nullable=True,
+    )
+
+    source_documents = Column(
+        JSON,
         nullable=True,
     )
 

@@ -1,8 +1,9 @@
 from datetime import datetime
+from typing import Optional
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
-from uuid import UUID
-from typing import Optional
+
 
 class MessageBase(BaseModel):
     message: str = Field(min_length=1)
@@ -25,5 +26,10 @@ class MessageResponse(MessageBase):
     topic: Optional[str] = None
     subtopic: Optional[str] = None
 
+    source_documents: list[dict] | None = None
+
     quiz_ready: bool = False
-    model_config = ConfigDict(from_attributes=True)
+
+    model_config = ConfigDict(
+        from_attributes=True
+    )

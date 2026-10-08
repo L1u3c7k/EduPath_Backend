@@ -33,6 +33,7 @@ class ChatService:
         assistant_text: str,
         subject: str | None,
         hierarchy: dict | None,
+        source_documents: list[dict] | None = None,
     ) -> ChatResponse:
 
         generated_title = (
@@ -64,6 +65,7 @@ class ChatService:
                 chapter=hierarchy.get("chapter"),
                 topic=hierarchy.get("topic"),
                 subtopic=hierarchy.get("subtopic"),
+                source_documents=source_documents or [],
             )
 
             new_chat.messages.append(user_msg)
@@ -183,6 +185,7 @@ class ChatService:
         assistant_text: str,
         subject: str | None,
         hierarchy: dict | None,
+        source_documents: list[dict] | None = None,
     ) -> MessageResponse | None:
 
         try:
@@ -219,8 +222,6 @@ class ChatService:
 
             # ------------------------------------------------
             # Preserve the permanent subject boundary.
-            #
-            # Once a chat has a subject, do not replace it.
             # ------------------------------------------------
 
             if (
@@ -255,6 +256,7 @@ class ChatService:
                 chapter=hierarchy.get("chapter"),
                 topic=hierarchy.get("topic"),
                 subtopic=hierarchy.get("subtopic"),
+                source_documents=source_documents or [],
             )
 
             db.add_all(
@@ -269,8 +271,6 @@ class ChatService:
             # ------------------------------------------------
             # Determine whether enough NEW user messages exist
             # for another quiz batch.
-            #
-            # The database cursor belongs to the Quiz record.
             # ------------------------------------------------
 
             quiz_stmt = (
@@ -289,11 +289,6 @@ class ChatService:
             )
 
             if quiz_record is None:
-                # ------------------------------------------------
-                # No quiz has ever been completed.
-                #
-                # Count all user messages.
-                # ------------------------------------------------
 
                 count_stmt = (
                     select(
@@ -306,12 +301,6 @@ class ChatService:
                 )
 
             else:
-                # ------------------------------------------------
-                # A completed quiz exists.
-                #
-                # Count user messages chronologically AFTER
-                # the quiz cursor.
-                # ------------------------------------------------
 
                 if quiz_record.last_message_id is None:
 
@@ -346,13 +335,6 @@ class ChatService:
                     )
 
                     if cursor_message is None:
-
-                        # ------------------------------------------------
-                        # Invalid/missing cursor.
-                        #
-                        # Safest behavior is to count all user messages
-                        # rather than silently claiming a batch exists.
-                        # ------------------------------------------------
 
                         count_stmt = (
                             select(
@@ -400,6 +382,9 @@ class ChatService:
 
             # ------------------------------------------------
             # Build response before commit.
+            #
+            # IMPORTANT:
+            # Include all message metadata here.
             # ------------------------------------------------
 
             response_data = MessageResponse(
@@ -408,6 +393,13 @@ class ChatService:
                 role=assistant_msg.role,
                 message=assistant_msg.message,
                 created_at=assistant_msg.created_at,
+                chapter=assistant_msg.chapter,
+                topic=assistant_msg.topic,
+                subtopic=assistant_msg.subtopic,
+                source_documents=(
+                    assistant_msg.source_documents
+                    or []
+                ),
                 quiz_ready=is_quiz_ready,
             )
 
@@ -532,8 +524,6 @@ class ChatService:
 
         # ----------------------------------------------------
         # UUIDs are NOT chronological.
-        #
-        # Use created_at + id as the ordering.
         # ----------------------------------------------------
 
         stmt = (
@@ -557,10 +547,6 @@ class ChatService:
 
         if len(messages) < 5:
             return None
-
-        # ----------------------------------------------------
-        # Return chronological order.
-        # ----------------------------------------------------
 
         messages.reverse()
 
@@ -634,6 +620,7 @@ class ChatService:
         new_assistant_text: str,
         subject: str | None,
         hierarchy: dict | None,
+        source_documents: list[dict] | None = None,
     ):
 
         if (
@@ -686,8 +673,6 @@ class ChatService:
 
         # ----------------------------------------------------
         # Get the latest USER message chronologically.
-        #
-        # UUID values cannot be used as timestamps.
         # ----------------------------------------------------
 
         latest_user_stmt = (
@@ -774,13 +759,6 @@ class ChatService:
         # ----------------------------------------------------
         # Find the first assistant message AFTER the edited
         # user message chronologically.
-        #
-        # The previous implementation used:
-        #
-        # created_at >= user_message.created_at
-        #
-        # which could select an earlier assistant message
-        # when timestamps were equal.
         # ----------------------------------------------------
 
         assistant_stmt = (
@@ -838,6 +816,10 @@ class ChatService:
                 hierarchy.get("subtopic")
             )
 
+            assistant_message.source_documents = (
+                source_documents or []
+            )
+
         # ----------------------------------------------------
         # If no assistant response exists, create one.
         # ----------------------------------------------------
@@ -851,6 +833,7 @@ class ChatService:
                 chapter=hierarchy.get("chapter"),
                 topic=hierarchy.get("topic"),
                 subtopic=hierarchy.get("subtopic"),
+                source_documents=source_documents or [],
             )
 
             db.add(
