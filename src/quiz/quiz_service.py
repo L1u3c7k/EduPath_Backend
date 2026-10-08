@@ -206,6 +206,79 @@ async def get_existing_questions(
     )
 
 
+def serialize_stored_question(
+    question: Question,
+) -> dict:
+    """
+    Convert a persisted question into the same plain-dict
+    shape the frontend already uses for quiz rendering.
+    """
+
+    return {
+        "id": str(
+            question.id
+        ),
+        "question_number": (
+            question.question_number
+        ),
+        "question": (
+            question.question
+        ),
+        "model_answer": (
+            question.model_answer
+        ),
+        "user_answer": (
+            question.user_answer
+        ),
+        "is_correct": (
+            question.is_correct
+        ),
+        "ai_feedback": (
+            question.ai_feedback
+        ),
+        "attempts_used": (
+            question.attempts_used
+        ),
+        "created_at": (
+            question.created_at.isoformat()
+            if question.created_at
+            else None
+        ),
+        "source": "stored",
+        "completed": True,
+    }
+
+
+async def get_stored_questions_for_chat(
+    db: AsyncSession,
+    chat_id: UUID,
+) -> list[dict]:
+    """
+    Return all completed PostgreSQL questions for a chat.
+    """
+
+    postgres_quiz = await get_quiz(
+        db=db,
+        chat_id=chat_id,
+    )
+
+    if postgres_quiz is None:
+
+        return []
+
+    questions = await get_existing_questions(
+        db=db,
+        quiz_id=postgres_quiz.id,
+    )
+
+    return [
+        serialize_stored_question(
+            question
+        )
+        for question in questions
+    ]
+
+
 # ============================================================
 # GENERATE QUIZ BATCH
 # ============================================================

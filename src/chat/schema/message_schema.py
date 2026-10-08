@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 from uuid import UUID
+from typing import Optional
 
 class MessageBase(BaseModel):
     message: str = Field(min_length=1)
@@ -20,9 +21,9 @@ class MessageResponse(MessageBase):
     created_at: datetime
     role: str
 
-    chapter: str | None
-    topic: str | None
-    subtopic: str | None
+    chapter: Optional[str] = None
+    topic: Optional[str] = None
+    subtopic: Optional[str] = None
 
     quiz_ready: bool = False
     model_config = ConfigDict(from_attributes=True)

@@ -131,10 +131,16 @@ async def generate_quiz_session(
 
     if error:
 
+        stored_questions = await quiz_service.get_stored_questions_for_chat(
+            db=db,
+            chat_id=chat_id,
+        )
+
         if quiz_data is not None:
             return {
                 "message": error,
                 "quiz": quiz_data,
+                "stored_questions": stored_questions,
             }
 
         raise HTTPException(
@@ -149,6 +155,12 @@ async def generate_quiz_session(
     return {
         "message": "Quiz generated successfully.",
         "quiz": quiz_data,
+        "stored_questions": (
+            await quiz_service.get_stored_questions_for_chat(
+                db=db,
+                chat_id=chat_id,
+            )
+        ),
     }
 
 
@@ -185,8 +197,13 @@ async def get_active_quiz(
     )
 
     # --------------------------------------------------------
-    # Get active Redis quiz
+    # Get stored PostgreSQL questions and active Redis quiz.
     # --------------------------------------------------------
+
+    stored_questions = await quiz_service.get_stored_questions_for_chat(
+        db=db,
+        chat_id=chat_id,
+    )
 
     quiz_data = await quiz_service.get_redis_quiz(
         redis_client=redis_client,
@@ -194,7 +211,7 @@ async def get_active_quiz(
         user_id=user_id,
     )
 
-    if quiz_data is None:
+    if quiz_data is None and not stored_questions:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No active quiz found.",
@@ -202,6 +219,7 @@ async def get_active_quiz(
 
     return {
         "quiz": quiz_data,
+        "stored_questions": stored_questions,
     }
 
 
